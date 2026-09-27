@@ -4,6 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
+  "author": "DefiRevived",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DefiRevived/looper-harness.git"
+  },
+  "homepage": "https://github.com/DefiRevived/looper-harness#readme",
+  "bugs": "https://github.com/DefiRevived/looper-harness/issues",
   "description": "Local agent runtime for a Looper NFT (Base) — activates a token's codex as a working agent with a web console, build workspace, research tools, MCP server and Telegram/Discord adapters.",
   "engines": {
     "node": ">=20"
