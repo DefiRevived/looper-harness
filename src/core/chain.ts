@@ -52,6 +52,15 @@ export async function readTokenIdentity(tokenId: number): Promise<TokenIdentity>
   return { tokenId, contract: address, name: name.trim(), symbol: symbol.trim(), owner, tokenUri };
 }
 
+/** Fresh `ownerOf` read (bypasses the bundle cache) — used by the ownership gate. */
+export async function readOwner(tokenId: number): Promise<string | null> {
+  const owner = await safe(
+    client.readContract({ address: config.contract, abi: erc721Abi, functionName: 'ownerOf', args: [BigInt(tokenId)] as const }),
+    null,
+  );
+  return owner ? String(owner) : null;
+}
+
 export interface AgentBindings {
   bound: boolean;
   agentId: string | null;

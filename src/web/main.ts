@@ -135,17 +135,37 @@ if (urlToken) {
   history.replaceState({}, '', `${location.pathname}${query.toString() ? `?${query}` : ''}`);
 }
 const authToken = localStorage.getItem('looper-harness.apiToken') ?? '';
-const authHeaders = (): Record<string, string> => (authToken ? { 'x-looper-token': authToken } : {});
+const authHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = {};
+  if (authToken) headers['x-looper-token'] = authToken;
+  const proof = tokenId ? localStorage.getItem(`looper-harness.proof.${tokenId}`) : null;
+  if (proof) headers['x-looper-proof'] = proof;
+  return headers;
+};
 
 function showAuthHint(): void {
   modeChip.textContent = 'access token required — reopen with ?token=…';
   modeChip.className = 'chip chip-error';
 }
 
+/** API error carrying the server's status + machine code (e.g. OWNERSHIP_REQUIRED). */
+class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: authHeaders() });
   if (res.status === 401) showAuthHint();
-  if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+    throw new ApiError(res.status, body.error ?? `GET ${url} -> ${res.status}`, body.code);
+  }
   return (await res.json()) as T;
 }
 
@@ -156,8 +176,8 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
     body: JSON.stringify(body ?? {}),
   });
   if (res.status === 401) showAuthHint();
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(data.error ?? `POST ${url} -> ${res.status}`);
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  if (!res.ok) throw new ApiError(res.status, data.error ?? `POST ${url} -> ${res.status}`, data.code);
   return data;
 }
 
@@ -1371,13 +1391,51 @@ function showActivation(message = ''): void {
   activationInput.focus();
 }
 
+/** GET the bundle; when the server demands an ownership proof, run the wallet check and retry once. */
+async function fetchBundle(token: number): Promise<ApiLooper> {
+  try {
+    return await getJson<ApiLooper>(`/api/looper/${token}`);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.code !== 'OWNERSHIP_REQUIRED') throw err;
+    await runOwnershipCheck(token);
+    return await getJson<ApiLooper>(`/api/looper/${token}`);
+  }
+}
+
+/** SIWE-style ownership check: one plain-message signature; no transaction, no gas. */
+async function runOwnershipCheck(token: number): Promise<void> {
+  const wallet = hostWallet();
+  if (!wallet) {
+    throw new Error('ownership verification is on and needs a browser wallet (or run the server with LOOPER_REQUIRE_OWNERSHIP=false)');
+  }
+  activationError.textContent = 'connect the wallet that owns this Looper…';
+  const accounts = (await wallet.request({ method: 'eth_requestAccounts' })) as string[] | undefined;
+  const address = accounts?.[0];
+  if (!address) throw new Error('no wallet account was provided');
+  const challenge = await postJson<{ nonce: string; message: string }>('/api/ownership/challenge', {
+    tokenId: token,
+    address,
+  });
+  activationError.textContent = 'sign the ownership message in your wallet — no gas, no transaction…';
+  const signature = (await wallet.request({
+    method: 'personal_sign',
+    params: [challenge.message, address],
+  })) as string;
+  const verified = await postJson<{ proof: string }>('/api/ownership/verify', {
+    nonce: challenge.nonce,
+    signature,
+  });
+  localStorage.setItem(`looper-harness.proof.${token}`, verified.proof);
+  activationError.textContent = '';
+}
+
 async function activate(token: number): Promise<void> {
   const firstBoot = !activationEl.classList.contains('hidden');
   tokenId = token;
   sessionKey = `web:${tokenId}`;
 
   try {
-    const data = await getJson<ApiLooper>(`/api/looper/${tokenId}`);
+    const data = await fetchBundle(tokenId);
     localStorage.setItem('looper-harness.token', String(tokenId));
     tokenInput.value = String(tokenId);
     renderAgent(data);
@@ -1387,7 +1445,7 @@ async function activate(token: number): Promise<void> {
     activationEl.classList.add('hidden');
   } catch (err) {
     if (firstBoot) {
-      showActivation(`couldn't load Looper #${tokenId} — ${(err as Error).message}. Check the id (1–7777) and your network, then try again.`);
+      showActivation(`couldn't activate Looper #${tokenId} — ${(err as Error).message}`);
       return;
     }
     agentName.textContent = `Looper #${tokenId}`;

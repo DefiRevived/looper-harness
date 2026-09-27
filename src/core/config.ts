@@ -26,6 +26,9 @@ export const config = {
   telegramBotToken: env('TELEGRAM_BOT_TOKEN'),
   discordBotToken: env('DISCORD_BOT_TOKEN'),
   apiToken: env('LOOPER_API_TOKEN'),
+  // Ownership gate: activation requires a wallet signature matching ownerOf.
+  // Default ON (public posture); LOOPER_REQUIRE_OWNERSHIP=false disables.
+  requireOwnership: env('LOOPER_REQUIRE_OWNERSHIP', 'true') !== 'false',
   chatRateLimitPerMinute: Number(env('CHAT_RATE_LIMIT_PER_MINUTE', '0')),
   maxMessageChars: Number(env('LOOPER_MAX_MESSAGE_CHARS', '4000')),
   dream: {

@@ -35,8 +35,8 @@ DEEPSEEK_MODEL=deepseek-flash   # valid names: deepseek-flash, deepseek-v4-pro
 BASE_RPC_URL=https://mainnet.base.org
 ```
 
-If `LOOPER_TOKEN_ID` is empty, the console asks for the token id on first boot — enter any Looper id and
-the runtime loads its identity, codex and art on the spot.
+If `LOOPER_TOKEN_ID` is empty, the console asks for the token id on first boot — enter a Looper you own,
+sign the gas-free ownership message, and the runtime loads its identity, codex and art on the spot.
 
 `.env` is gitignored — keep keys there, never in code.
 
@@ -63,6 +63,20 @@ the runtime loads its identity, codex and art on the spot.
   nightly "dream" synthesis, tasks and locks.
 - **Adapters** — Telegram/Discord bots sharing the brain (Telegram gets a small read-only tool lane) and an
   MCP server over stdio.
+
+## Ownership verification
+
+By default the harness verifies that the operator's wallet actually owns the token before activating it:
+the console asks for one off-chain signature — the message carries your address, the token id and a nonce,
+and states plainly that it is a check (no transaction, no gas). The server recovers the signer, compares it
+with a fresh `ownerOf(tokenId)` read from Base, and issues a proof scoped to that token (valid 24 h).
+
+- A valid signature from a wallet that does **not** own the token is refused, and the refusal names the
+  actual owner.
+- `LOOPER_REQUIRE_OWNERSHIP=false` disables the gate — useful for demos and for browsing a Looper you
+  don't hold.
+- Scope: the gate covers activation and the agent's main operations (identity, chat, vitals, dreams). It is
+  not a full multi-tenant auth layer — per-visitor isolation for hosted use is on the roadmap.
 
 ## Scripts
 
@@ -91,14 +105,17 @@ Local-first and keyless by default — the runtime never holds wallet keys and c
 | Surface | Default | Turn on with |
 | --- | --- | --- |
 | Web console | bound to `127.0.0.1`, no auth | `LOOPER_API_TOKEN=…` (header `x-looper-token`, or bootstrap once with `?token=`) |
+| Ownership gate | **on** — one gas-free signature per token, 24 h proof | `LOOPER_REQUIRE_OWNERSHIP=false` |
 | Chat throttle | disabled | `CHAT_RATE_LIMIT_PER_MINUTE=20` |
 | Telegram / Discord | open (startup warning) | `TELEGRAM_ALLOWED_CHAT_IDS` / `DISCORD_ALLOWED_USER_IDS` |
 | MCP | stdio, process-scoped | — |
 
 The wallet bridge refuses `eth_sign`, `personal_sign`, `eth_signTypedData*` and `eth_sendRawTransaction` by
-policy, and every transaction goes through a host-rendered, simulated confirmation panel. The full doctrine
-lives in `docs/security-bible.md`. If you ever host this publicly, add authentication (a wallet-signature
-gate is the documented missing piece) and watch LLM spend.
+policy, and every transaction goes through a host-rendered, simulated confirmation panel. (The console's own
+ownership check signs a clearly-worded, inert message — bridge policy applies to dapp previews, not to this
+explicit activation step.) The full doctrine lives in `docs/security-bible.md`. If you host this publicly,
+mind LLM spend; the ownership gate protects activation, but full per-visitor isolation is still on the
+roadmap.
 
 ## Real vs local
 

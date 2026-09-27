@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { config } from '../core/config.js';
 import { invalidateLooper, loadLooper } from '../core/codex.js';
 import { readAgentBindings, readWalletBalances } from '../core/chain.js';
@@ -16,6 +16,7 @@ import { listVersions, readVersionEntry, versionSnapshotDir } from '../core/vers
 import { allLocks, forgetEntry, listMemoryEntries, lockRemove, taskComplete, taskList } from '../core/memory.js';
 import { listActivity } from '../core/activity.js';
 import { runDream } from '../core/dreams.js';
+import { createChallenge, validateProof, verifyOwnership } from '../core/ownership.js';
 import { inspectTransaction, parseChain, READ_RPC_METHODS, rpcRead } from '../core/web3.js';
 import { listTranscripts, readTranscript } from '../core/transcripts.js';
 import * as store from '../core/store.js';
@@ -211,6 +212,57 @@ function requireToken(res: Response, tokenId: number): boolean {
   return false;
 }
 
+/**
+ * Ownership gate (LOOPER_REQUIRE_OWNERSHIP): token-scoped routes demand an
+ * activation proof obtained through the wallet check — proof that the caller
+ * holds the token. Disabled → every request passes (local/demo posture).
+ */
+function requireProof(req: Request, res: Response, tokenId: number): boolean {
+  if (!config.requireOwnership) return true;
+  const header = req.headers['x-looper-proof'];
+  const proof = String(Array.isArray(header) ? header[0] : (header ?? req.query.proof ?? ''));
+  if (proof && validateProof(proof, tokenId)) return true;
+  res.status(403).json({
+    error: 'ownership proof required — activate this token with the wallet that owns it',
+    code: 'OWNERSHIP_REQUIRED',
+  });
+  return false;
+}
+
+// --- ownership verification (SIWE-style; no transaction, no gas) -------------
+
+apiRouter.post('/ownership/challenge', (req, res) => {
+  const tokenId = parseTokenId(req.body?.tokenId);
+  if (!requireToken(res, tokenId)) return;
+  const address = String(req.body?.address ?? '').trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    res.status(400).json({ error: 'a 0x wallet address is required' });
+    return;
+  }
+  res.json({ tokenId, ...createChallenge(tokenId, address) });
+});
+
+apiRouter.post('/ownership/verify', async (req, res) => {
+  const nonce = String(req.body?.nonce ?? '');
+  const signature = String(req.body?.signature ?? '');
+  if (!nonce || !signature) {
+    res.status(400).json({ error: 'nonce and signature are required' });
+    return;
+  }
+  const result = await verifyOwnership(nonce, signature);
+  if (!result.ok) {
+    const message =
+      result.code === 'not-owner'
+        ? `the signature is valid, but this wallet does not own Looper #${result.tokenId} (owner: ${result.owner ?? 'unknown'})`
+        : result.code === 'bad-signature'
+          ? 'the signature did not verify against the wallet address'
+          : 'ownership challenge is unknown or expired — try again';
+    res.status(403).json({ error: message, code: result.code });
+    return;
+  }
+  res.json({ ok: true, tokenId: result.tokenId, address: result.address, proof: result.proof });
+});
+
 // Wallet reads hit an RPC and the vitals panel polls — cache per address briefly.
 const walletCache = new Map<string, { fetchedAt: number; data: { eth: string; usdc: string; at: string } }>();
 
@@ -230,6 +282,7 @@ async function cachedWallet(address: string): Promise<{ eth: string; usdc: strin
 apiRouter.get('/looper/:tokenId', async (req, res) => {
   const tokenId = parseTokenId(req.params.tokenId);
   if (!requireToken(res, tokenId)) return;
+  if (!requireProof(req, res, tokenId)) return;
   const bundle = await loadLooper(tokenId);
   const bindings = await readAgentBindings(tokenId);
   const helixaCred = bindings.agentId ? await readHelixaCred(bindings.agentId) : null;
@@ -246,6 +299,7 @@ apiRouter.get('/looper/:tokenId', async (req, res) => {
 apiRouter.post('/looper/:tokenId/refresh', async (req, res) => {
   const tokenId = parseTokenId(req.params.tokenId);
   if (!requireToken(res, tokenId)) return;
+  if (!requireProof(req, res, tokenId)) return;
   invalidateLooper(tokenId);
   await loadLooper(tokenId);
   res.json({ ok: true, tokenId });
@@ -289,6 +343,7 @@ apiRouter.post('/chat/reset', (req, res) => {
 apiRouter.post('/chat', chatRateLimit, async (req, res) => {
   const tokenId = parseTokenId(req.body?.tokenId);
   if (!requireToken(res, tokenId)) return;
+  if (!requireProof(req, res, tokenId)) return;
   const sessionKey = String(req.body?.sessionKey ?? `web:${tokenId}`);
   const message = String(req.body?.message ?? '').trim();
   if (!message) {
@@ -444,6 +499,7 @@ apiRouter.post('/versions/revert', async (req, res) => {
 
 apiRouter.get('/vitals', async (req, res) => {
   const tokenId = parseTokenId(req.query.tokenId);
+  if (!requireProof(req, res, tokenId)) return;
   const sessionKey = String(req.query.sessionKey ?? `web:${tokenId}`);
   const parentKey = parseBuildThread(sessionKey)?.parentKey ?? sessionKey;
   let owner: string | null = null;
@@ -496,6 +552,7 @@ apiRouter.get('/transcripts/:session', (req, res) => {
 apiRouter.post('/dream', async (req, res) => {
   const tokenId = parseTokenId(req.body?.tokenId);
   if (!requireToken(res, tokenId)) return;
+  if (!requireProof(req, res, tokenId)) return;
   res.json(await runDream(tokenId, 'manual'));
 });
 
