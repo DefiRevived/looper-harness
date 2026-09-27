@@ -34,9 +34,12 @@ console.log(`data dir: ${dataDirInfo().effective}`);
 if (!llmApiKey()) {
   console.log('\nno API key configured — live checks skipped');
 } else {
-  console.log('\nturn 1 — plain reply: reasoning must stream BEFORE the text');
+  console.log('\nturn 1 — reasoning-bait reply: reasoning must stream BEFORE the text');
   const events: AgentEvent[] = [];
-  for await (const event of streamAgentReplyWithTools(TOKEN, 'test:thought-stream', 'Reply with exactly: ok — do not use any tools.', 'web')) {
+  // A trivial prompt can legitimately skip the hybrid model's thinking phase
+  // (seen live), which would make the assertion below meaningless — this
+  // arithmetic prompt reliably triggers reasoning.
+  for await (const event of streamAgentReplyWithTools(TOKEN, 'test:thought-stream', 'Think it through step by step, then reply with exactly: 391 — do not use any tools.', 'web')) {
     events.push(event);
   }
   const firstThought = events.findIndex((e) => e.type === 'thought' && e.text.trim());
@@ -51,7 +54,7 @@ if (!llmApiKey()) {
     firstThought >= 0 && (firstDelta === -1 || firstThought < firstDelta),
     `first thought #${firstThought}, first text #${firstDelta}`,
   );
-  check('reply still lands intact', /ok/i.test(reply), JSON.stringify(reply.slice(0, 60)));
+  check('reply still lands intact', /391/.test(reply), JSON.stringify(reply.slice(0, 60)));
   const snippet = thoughtText.trim().replace(/\s+/g, ' ').slice(0, 140);
   if (snippet) console.log(`    thought snippet: “${snippet}…”`);
 
