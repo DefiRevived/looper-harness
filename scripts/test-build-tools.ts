@@ -1,6 +1,6 @@
 /**
- * Smoke test for the build tools: a listing pass on token 452 (may be empty on
- * a fresh install), then a full multi-file round-trip (scaffold → file ops →
+ * Smoke test for the build tools: a listing pass on a sample session (may be
+ * empty on a fresh install), then a full multi-file round-trip (scaffold → file ops →
  * check → versions → revert → delete) on a scratch session that is cleaned up
  * afterwards.
  */
@@ -26,8 +26,8 @@ function expect(cond: boolean, label: string): void {
 const PIXEL_PNG_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
-console.log('===== list_builds (web:452) — sample listing (head) =====');
-const list = await call({ sessionKey: 'web:452', surface: 'web', tokenId: 452 }, 'list_builds', {});
+console.log('===== list_builds (sample session) — sample listing (head) =====');
+const list = await call({ sessionKey: 'web:999990', surface: 'web', tokenId: 999990 }, 'list_builds', {});
 console.log(list.modelText.split('\n').slice(0, 5).join('\n'));
 
 console.log('\n===== multi-file scaffold (scratch) =====');

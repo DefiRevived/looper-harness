@@ -13,7 +13,8 @@ import { config } from '../src/core/config.js';
 import { dataPath } from '../src/core/settings.js';
 import type { ToolCall } from '../src/core/llm.js';
 
-const TOKEN = 452;
+/** Live-read fixture token — override with LOOPER_TEST_TOKEN to point at your own. */
+const TOKEN = Number(process.env.LOOPER_TEST_TOKEN ?? 7777);
 let fails = 0;
 const check = (label: string, ok: boolean, detail = ''): void => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` — ${detail}` : ''}`);
@@ -51,8 +52,8 @@ const symbol = await call('read_contract', { chain: 'base', address: USDC, funct
 check('read USDC symbol', /result: USDC/.test(symbol.modelText), symbol.modelText.split('\n')[1] ?? '');
 const decimals = await call('read_contract', { chain: 'base', address: USDC, function: 'decimals' });
 check('read USDC decimals = 6', /result: 6\b/.test(decimals.modelText), decimals.modelText.split('\n')[1] ?? '');
-const owner = await call('read_contract', { chain: 'base', address: LOOPERS, function: 'ownerOf(uint256)', args: [452] });
-check('ownerOf(452) returns a live owner address', /0x[0-9a-fA-F]{40}/.test(owner.modelText), owner.modelText.split('\n')[1] ?? '');
+const owner = await call('read_contract', { chain: 'base', address: LOOPERS, function: 'ownerOf(uint256)', args: [TOKEN] });
+check(`ownerOf(${TOKEN}) returns a live owner address`, /0x[0-9a-fA-F]{40}/.test(owner.modelText), owner.modelText.split('\n')[1] ?? '');
 
 // --- 4. write-function rejection (fail closed)
 const writeTry = await call('read_contract', { chain: 'base', address: USDC, function: 'transfer', args: [SAMPLE_ADDR, '1'] });

@@ -5,7 +5,7 @@
 import { executeToolCall, type ToolContext } from '../src/core/tools.js';
 import { webFetch, webSearch } from '../src/core/research.js';
 
-const ctx: ToolContext = { sessionKey: 'web:999955', surface: 'web', tokenId: 452 };
+const ctx: ToolContext = { sessionKey: 'web:999955', surface: 'web', tokenId: 999955 };
 let failures = 0;
 const expect = (cond: boolean, label: string): void => {
   console.log(`${cond ? 'ok  ' : 'FAIL'} ${label}`);

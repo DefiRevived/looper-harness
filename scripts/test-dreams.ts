@@ -6,7 +6,8 @@
 import { dreamDue, runDream } from '../src/core/dreams.js';
 import { backfillLayers, listDreams, memoryRecall } from '../src/core/memory.js';
 
-const TOKEN = 452;
+/** Live-read fixture token — override with LOOPER_TEST_TOKEN to point at your own. */
+const TOKEN = Number(process.env.LOOPER_TEST_TOKEN ?? 7777);
 let fails = 0;
 const check = (label: string, ok: boolean, detail = ''): void => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` — ${detail}` : ''}`);
@@ -49,7 +50,7 @@ earlyDate.setHours(1, 0, 0, 0);
 const early = await dreamDue(TOKEN, earlyDate);
 check('schedule reports "early" before the dream hour', early === 'early', early);
 
-const recalled = await memoryRecall({ tokenId: TOKEN, sessionKey: 'web:452', limit: 30 });
+const recalled = await memoryRecall({ tokenId: TOKEN, sessionKey: `web:${TOKEN}`, limit: 30 });
 check('recall surfaces the dream (scope dream)', recalled.some((e) => e.scope === 'dream'));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nall green');

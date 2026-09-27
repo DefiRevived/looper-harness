@@ -8,7 +8,7 @@ import path from 'node:path';
 import { executeToolCall } from '../src/core/tools.js';
 import { buildsRoot } from '../src/core/settings.js';
 
-const ctx = { sessionKey: 'web:452', surface: 'web' as const, tokenId: 452 };
+const ctx = { sessionKey: 'web:999992', surface: 'web' as const, tokenId: 999992 };
 const call = (name: string, args: Record<string, unknown>) =>
   executeToolCall({ id: name, type: 'function', function: { name, arguments: JSON.stringify(args) } }, ctx);
 

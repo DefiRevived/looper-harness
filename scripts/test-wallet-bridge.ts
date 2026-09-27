@@ -11,16 +11,22 @@
  *      - a second send, approved with a stubbed host wallet → the build receives
  *        the tx hash, proving the full loop up to the wallet boundary.
  *
- * Run (dev server must be up): node_modules\.bin\tsx.cmd scripts\test-wallet-bridge.ts
+ * Self-contained: spawns its own local runtime on :4532 with the ownership gate
+ * off (throwaway data dir) — no dev server needed and the operator's server is
+ * untouched. Run from the repo root: node_modules\.bin\tsx.cmd scripts\test-wallet-bridge.ts
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
 import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
 import { encodeFunctionData } from 'viem';
 import { buildsRoot } from '../src/core/settings.js';
 
-const BASE = 'http://127.0.0.1:4520';
-const TOKEN = 452;
+const PORT = 4532;
+const BASE = `http://127.0.0.1:${PORT}`;
+/** Real token so the console can activate; only scratch build files are touched. */
+const TOKEN = Number(process.env.LOOPER_TEST_TOKEN ?? 7777);
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const OWNER = '0x1111111111111111111111111111111111111111';
 const DEAD = '0x000000000000000000000000000000000000dEaD';
@@ -67,12 +73,53 @@ const transferHugeData = encodeFunctionData({
 
 // ---------------------------------------------------------------- 1. server side
 
-try {
-  const ping = await fetch(`${BASE}/api/vitals`);
-  if (!ping.ok) throw new Error(`HTTP ${ping.status}`);
-} catch (err) {
-  console.error(`dev server not reachable at ${BASE} — start it first (npm run dev). ${(err as Error).message}`);
-  process.exit(1);
+// ---------------------------------------------------- 0. local runtime (self-contained)
+const tmpDir = path.join(os.tmpdir(), `looper-wallet-bridge-${Date.now()}`);
+process.env.LOOPER_DATA_DIR = tmpDir; // scratch builds written below are served by the child
+const serverProc = spawn(
+  process.execPath,
+  [path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs'), path.join(process.cwd(), 'src', 'server', 'index.ts')],
+  {
+    cwd: process.cwd(),
+    env: { ...process.env, PORT: String(PORT), LOOPER_DATA_DIR: tmpDir, LOOPER_REQUIRE_OWNERSHIP: 'false', LOOPER_TOKEN_ID: String(TOKEN) },
+    stdio: 'ignore',
+  },
+);
+const stopServer = (): void => {
+  if (serverProc.pid) {
+    if (process.platform === 'win32') {
+      try {
+        spawnSync('taskkill', ['/PID', String(serverProc.pid), '/T', '/F'], { stdio: 'ignore' });
+      } catch {
+        serverProc.kill();
+      }
+    } else {
+      serverProc.kill();
+    }
+  }
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+};
+
+{
+  let up = false;
+  for (let i = 0; i < 45; i += 1) {
+    try {
+      const ping = await fetch(`${BASE}/api/settings`);
+      if (ping.ok) {
+        up = true;
+        break;
+      }
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (!up) {
+    console.error(`couldn't start the local test server on :${PORT}`);
+    stopServer();
+    process.exit(1);
+  }
+  console.log(`local runtime up on :${PORT} (gate off, data ${tmpDir})`);
 }
 
 const shim = await fetch(`${BASE}/looper-wallet.js`);
@@ -208,6 +255,8 @@ try {
   browser = await chromium.launch({ channel: 'msedge', headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
+  // Auto-activate the fixture token on boot (the gate is off on the test server).
+  await page.addInitScript(`localStorage.setItem('looper-harness.token', '${TOKEN}');`);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
 
   // Stub the operator's wallet in the CONSOLE page so the approve path can run
@@ -259,6 +308,7 @@ try {
 } finally {
   await browser?.close().catch(() => undefined);
   fs.rmSync(scratchFolder, { recursive: true, force: true });
+  stopServer();
 }
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nall wallet-bridge checks passed');

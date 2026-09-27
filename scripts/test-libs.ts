@@ -28,7 +28,7 @@ for (const l of libs) {
 }
 
 // 2) list_libs tool
-const ctx = { sessionKey: 'web:999997', surface: 'web' as const, tokenId: 452 };
+const ctx = { sessionKey: 'web:999997', surface: 'web' as const, tokenId: 999997 };
 const libsResult = await executeToolCall({ id: 't1', type: 'function', function: { name: 'list_libs', arguments: '{}' } }, ctx);
 check('list_libs mentions three', libsResult.modelText.includes('three @0.159.0'));
 check('list_libs gives the exact script path', libsResult.modelText.includes('/libs/three.min.js'));

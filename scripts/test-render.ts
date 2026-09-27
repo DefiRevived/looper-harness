@@ -13,7 +13,8 @@ import { config } from '../src/core/config.js';
 import { buildsRoot } from '../src/core/settings.js';
 import type { ToolCall } from '../src/core/llm.js';
 
-const TOKEN = 452;
+/** Fixture session — point LOOPER_TEST_TOKEN at a token whose session has builds. */
+const TOKEN = Number(process.env.LOOPER_TEST_TOKEN ?? 7777);
 const PARENT = `web:${TOKEN}`;
 let fails = 0;
 const check = (label: string, ok: boolean, detail = ''): void => {
@@ -27,13 +28,26 @@ const call = (name: string, args: Record<string, unknown>): Promise<{ modelText:
     { sessionKey: PARENT, surface: 'web', tokenId: TOKEN },
   );
 
-// --- 1. a real build the operator has: prefer the WebGL torus, else snake, else any html.
+// --- 1. a real build the operator has: prefer the WebGL torus, else snake, else any html;
+// on a fresh install, scaffold a known-good probe build so this suite is self-sufficient.
 const builds = listArtifacts(PARENT);
-const pick =
+let pick =
   builds.find((b) => b.kind === 'html' && /torus/i.test(b.title)) ??
   builds.find((b) => b.kind === 'html' && /snake/i.test(b.title)) ??
   builds.find((b) => b.kind === 'html');
-check('found an html build to render', Boolean(pick), pick ? `${pick.id} (${pick.title})` : 'none');
+let scaffolded = false;
+if (!pick) {
+  const probeId = '1790000000006-render-probe';
+  const probeFolder = path.join(buildsRoot(), `web_${TOKEN}`, probeId);
+  fs.mkdirSync(probeFolder, { recursive: true });
+  fs.writeFileSync(
+    path.join(probeFolder, 'index.html'),
+    '<!doctype html><html><head><title>render probe</title><style>body{margin:0;background:#0a0d13;color:#d7dde8;font-family:sans-serif}h1{padding:40px}.bar{width:120px;height:60px;background:#ff6a2b;animation:slide 1.2s infinite alternate}@keyframes slide{to{transform:translateX(300px)}}</style></head><body><h1 id="t">render probe</h1><div class="bar"></div><script>document.getElementById("t").textContent = "live probe ok";</script></body></html>',
+  );
+  pick = listArtifacts(PARENT).find((b) => b.id === probeId);
+  scaffolded = true;
+}
+check('found an html build to render', Boolean(pick), pick ? `${pick.id} (${pick.title})${scaffolded ? ' [scaffolded]' : ''}` : 'none');
 if (!pick) process.exit(1);
 
 const good = await call('verify_render', { build_id: pick.id });
@@ -64,6 +78,7 @@ check('broken build: uncaught error detected', /boom-render-test/.test(bad.model
 check('broken build: verdict flags issues', /RENDERED WITH ISSUES/.test(bad.modelText));
 check('broken build: not reported clean', !/RENDERED CLEAN/.test(bad.modelText));
 fs.rmSync(brokenFolder, { recursive: true, force: true });
+if (scaffolded && pick) fs.rmSync(path.join(buildsRoot(), `web_${TOKEN}`, pick.id), { recursive: true, force: true });
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nall render checks passed');
 process.exit(fails ? 1 : 0);

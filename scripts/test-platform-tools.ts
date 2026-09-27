@@ -2,7 +2,8 @@
  * Platform-tools smoke test: telegram lane, version archive + revert,
  * task board, wallet/market reads, looper-art placeholders (unit + live
  * serve route), and the ReMEM smart layer (intake dedup + relevance recall).
- * Scratch-only (token 999999, web_999999 dir) — nothing real is touched.
+ * Scratch-only for everything mutable (token 999999, web_999999 dir); the
+ * wallet + art reads use a live sample token (LOOPER_TEST_TOKEN overrides).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,6 +14,8 @@ import { memoryRecall, memoryRemember, purgeTokenMemory, taskAdd, taskComplete, 
 import { buildsRoot, dataPath } from '../src/core/settings.js';
 
 const TOKEN = 999999;
+/** Live-read fixture token (wallet + art) — override with LOOPER_TEST_TOKEN. */
+const LIVE_TOKEN = Number(process.env.LOOPER_TEST_TOKEN ?? 7777);
 const call = (ctx: ToolContext, name: string, args: Record<string, unknown>) =>
   executeToolCall({ id: name, type: 'function', function: { name, arguments: JSON.stringify(args) } }, ctx);
 const webCtx: ToolContext = { sessionKey: 'web:999999', surface: 'web', tokenId: TOKEN };
@@ -54,19 +57,19 @@ console.log((await call(webCtx, 'task_list', {})).modelText);
 console.log('(t1 id kept for reference:', t1.id, ')');
 
 console.log('\n===== wallet + market (live reads) =====');
-const ownerCtx: ToolContext = { sessionKey: 'web:999999', surface: 'web', tokenId: 452 };
+const ownerCtx: ToolContext = { sessionKey: 'web:999999', surface: 'web', tokenId: LIVE_TOKEN };
 console.log((await call(ownerCtx, 'read_wallet', {})).modelText);
 console.log((await call(webCtx, 'market_price', { token_address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' })).modelText);
 
 console.log('\n===== looper art =====');
-console.log('placeholder count:', looperImageCount('a {{looper-image:452}} b {{looper-image:452}}'), '(expect 2)');
-const resolved = await resolveLooperImages('before {{looper-image:452}} after');
+console.log('placeholder count:', looperImageCount(`a {{looper-image:${LIVE_TOKEN}}} b {{looper-image:${LIVE_TOKEN}}}`), '(expect 2)');
+const resolved = await resolveLooperImages(`before {{looper-image:${LIVE_TOKEN}}} after`);
 console.log('resolved len:', resolved.length, '| contains data:image:', resolved.includes('data:image/'));
 
 console.log('\n===== served substitution (live route) =====');
 const sid = '1790000000005-art-check';
 fs.mkdirSync(path.join(dir, sid), { recursive: true });
-fs.writeFileSync(path.join(dir, sid, 'index.html'), '<!DOCTYPE html><html><body><img src="{{looper-image:452}}"></body></html>');
+fs.writeFileSync(path.join(dir, sid, 'index.html'), `<!DOCTYPE html><html><body><img src="{{looper-image:${LIVE_TOKEN}}}"></body></html>`);
 let served = '';
 for (let attempt = 0; attempt < 5; attempt++) {
   try {

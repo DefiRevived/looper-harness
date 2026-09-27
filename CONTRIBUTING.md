@@ -22,7 +22,9 @@ the full pipeline stays testable offline.
 - `npm run build` — frontend compile check.
 - `scripts/test-*.ts` — run with `npx tsx scripts/<name>.ts`. Live checks
   (chain / Arweave / LLM) skip themselves when their prerequisites are absent;
-  several suites expect the dev server on `127.0.0.1:4520`.
+  several suites expect the dev server on `127.0.0.1:4520`. Fixture suites that
+  read live data default to sample token `7777` — point them at your own with
+  `LOOPER_TEST_TOKEN=<id>`.
 
 ## Ground rules
 

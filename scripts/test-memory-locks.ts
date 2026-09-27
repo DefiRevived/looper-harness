@@ -29,8 +29,8 @@ console.log(`thread recall: ${inThread.length} entries (expect 2 — build note 
 console.log(`console recall: ${inConsole.length} entries (expect 1 — operator rule only)`);
 console.log('console content:', inConsole[0]?.content);
 
-const otherToken = await memoryRecall({ tokenId: 452, limit: 5 });
-console.log(`cross-token isolation: ${otherToken.length} entries under token 452 (informational — nothing should leak between tokens)`);
+const otherToken = await memoryRecall({ tokenId: 997766, limit: 5 });
+console.log(`cross-token isolation: ${otherToken.length} entries under another token (informational — nothing should leak between tokens)`);
 
 const dir = path.join(buildsRoot(), 'web_999999');
 const folder = path.join(dir, buildId);
