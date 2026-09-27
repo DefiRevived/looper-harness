@@ -130,6 +130,11 @@ const dirStatus = $<HTMLParagraphElement>('dir-status');
 const dirClose = $<HTMLButtonElement>('dir-close');
 const dirCancel = $<HTMLButtonElement>('dir-cancel');
 const dirChoose = $<HTMLButtonElement>('dir-choose');
+const dirNewOpen = $<HTMLButtonElement>('dir-new-open');
+const dirNew = $<HTMLDivElement>('dir-new');
+const dirNewName = $<HTMLInputElement>('dir-new-name');
+const dirNewCreate = $<HTMLButtonElement>('dir-new-create');
+const dirNewCancel = $<HTMLButtonElement>('dir-new-cancel');
 const setupEl = $<HTMLDivElement>('setup');
 const setupDataDir = $<HTMLInputElement>('setup-data-dir');
 const setupDataEffective = $<HTMLParagraphElement>('setup-data-effective');
@@ -1055,11 +1060,13 @@ async function loadDir(target?: string): Promise<void> {
     dirParent = listing.parent;
     dirPath.value = listing.path;
     dirUp.disabled = !listing.parent;
+    dirNewOpen.disabled = false;
     renderDirRoots(listing);
     renderDirList(listing);
   } catch (err) {
     dirStatus.textContent = (err as Error).message;
     dirList.innerHTML = '';
+    dirNewOpen.disabled = true;
     if (dirCurrent) dirPath.value = dirCurrent;
   }
 }
@@ -1068,6 +1075,8 @@ function openDirPicker(current: string, apply: (path: string) => void): void {
   dirPickHandler = apply;
   dirCurrent = '';
   dirParent = null;
+  hideNewFolderRow();
+  dirNewOpen.disabled = true;
   dirModal.classList.remove('hidden');
   const start = current.trim();
   void (async () => {
@@ -1082,6 +1091,7 @@ function openDirPicker(current: string, apply: (path: string) => void): void {
 function closeDirPicker(): void {
   dirModal.classList.add('hidden');
   dirPickHandler = null;
+  hideNewFolderRow();
 }
 
 function confirmDirPick(): void {
@@ -1090,6 +1100,41 @@ function confirmDirPick(): void {
     toast(`folder selected — ${dirCurrent}`);
   }
   closeDirPicker();
+}
+
+function showNewFolderRow(): void {
+  if (!dirCurrent) {
+    dirStatus.textContent = 'open a folder first — then a new one can be created inside it.';
+    return;
+  }
+  dirStatus.textContent = '';
+  dirNew.classList.remove('hidden');
+  dirNewName.value = '';
+  dirNewName.focus();
+}
+
+function hideNewFolderRow(): void {
+  dirNew.classList.add('hidden');
+  dirNewName.value = '';
+}
+
+async function createDirInCurrent(): Promise<void> {
+  const name = dirNewName.value.trim();
+  if (!name) {
+    dirStatus.textContent = 'type a folder name first.';
+    return;
+  }
+  dirNewCreate.disabled = true;
+  try {
+    const made = await postJson<{ ok: boolean; path: string }>('/api/fs/mkdir', { path: dirCurrent, name });
+    hideNewFolderRow();
+    await loadDir(made.path);
+    toast(`folder created — ${made.path}`);
+  } catch (err) {
+    dirStatus.textContent = (err as Error).message;
+  } finally {
+    dirNewCreate.disabled = false;
+  }
 }
 
 async function saveSettings(): Promise<void> {
@@ -1996,6 +2041,18 @@ dirCancel.addEventListener('click', closeDirPicker);
 dirChoose.addEventListener('click', confirmDirPick);
 dirModal.addEventListener('click', (event) => {
   if (event.target === dirModal) closeDirPicker();
+});
+dirNewOpen.addEventListener('click', showNewFolderRow);
+dirNewCreate.addEventListener('click', () => void createDirInCurrent());
+dirNewCancel.addEventListener('click', hideNewFolderRow);
+dirNewName.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void createDirInCurrent();
+  } else if (event.key === 'Escape') {
+    event.stopPropagation();
+    hideNewFolderRow();
+  }
 });
 
 tokenForm.addEventListener('submit', (event) => {

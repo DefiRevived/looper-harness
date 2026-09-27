@@ -283,10 +283,16 @@
             <button class="btn" type="button" id="dir-go">go</button>
           </div>
           <div class="dir-roots" id="dir-roots"></div>
+          <div class="dir-new hidden" id="dir-new">
+            <input id="dir-new-name" type="text" placeholder="new folder name…" autocomplete="off" spellcheck="false" maxlength="64" />
+            <button class="btn btn-accent" type="button" id="dir-new-create">create</button>
+            <button class="btn btn-ghost" type="button" id="dir-new-cancel">cancel</button>
+          </div>
           <p class="settings-error" id="dir-status"></p>
           <div class="dir-list" id="dir-list"></div>
-          <p class="settings-hint" id="dir-note">folders on this machine — click to open one; “use this folder” confirms the path shown above.</p>
+          <p class="settings-hint" id="dir-note">folders on this machine — click to open one; create a new one with ＋; “use this folder” confirms the path shown above.</p>
           <div class="settings-actions">
+            <button class="btn btn-ghost dir-new-open" type="button" id="dir-new-open">＋ new folder</button>
             <button class="btn btn-ghost" type="button" id="dir-cancel">cancel</button>
             <button class="btn btn-accent" type="button" id="dir-choose">use this folder</button>
           </div>

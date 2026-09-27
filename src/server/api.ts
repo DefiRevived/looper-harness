@@ -17,7 +17,7 @@ import { allLocks, forgetEntry, listMemoryEntries, lockRemove, taskComplete, tas
 import { listActivity } from '../core/activity.js';
 import { runDream } from '../core/dreams.js';
 import { createChallenge, validateProof, verifyOwnership } from '../core/ownership.js';
-import { listDirectories } from '../core/fsBrowse.js';
+import { createDirectory, listDirectories } from '../core/fsBrowse.js';
 import { applySettings, buildsRoot, setupState } from '../core/settings.js';
 import { inspectTransaction, parseChain, READ_RPC_METHODS, rpcRead } from '../core/web3.js';
 import { listTranscripts, readTranscript } from '../core/transcripts.js';
@@ -304,15 +304,29 @@ apiRouter.post('/settings', (req, res) => {
   }
 });
 
-// --- local folder picker: read-only listings of the operator's filesystem ---
+// --- local folder picker: listings of the operator's filesystem -------------
 // The console's browse… buttons walk the REAL machine through these listings
 // (a browser alone cannot reveal absolute paths). Same local-first trust model
-// as /api/settings: read-only, relative paths rejected, nothing written.
+// as /api/settings: relative paths rejected; listings are read-only, and the
+// one writer — mkdir — creates a single explicitly-named folder, nothing else.
 
 apiRouter.get('/fs/dirs', (req, res) => {
   try {
     const requested = typeof req.query.path === 'string' ? req.query.path : undefined;
     res.json({ listing: listDirectories(requested) });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+apiRouter.post('/fs/mkdir', (req, res) => {
+  const body = (req.body ?? {}) as { path?: unknown; name?: unknown };
+  if (typeof body.path !== 'string' || typeof body.name !== 'string') {
+    res.status(400).json({ error: 'path (the folder to create inside) and name are required' });
+    return;
+  }
+  try {
+    res.json({ ok: true, ...createDirectory(body.path, body.name) });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }

@@ -1464,6 +1464,20 @@ input:focus {
   padding: 10px 12px;
 }
 
+.dir-new {
+  display: flex;
+  gap: 8px;
+}
+
+.dir-new input {
+  flex: 1;
+  min-width: 0;
+}
+
+.dir-new-open {
+  margin-right: auto;
+}
+
 .toast {
   position: fixed;
   right: 18px;

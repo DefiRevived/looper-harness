@@ -113,3 +113,41 @@ export function listDirectories(rawPath?: string): DirListing {
     truncated,
   };
 }
+
+const INVALID_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001F]/;
+const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/**
+ * Create ONE folder inside an existing one, for the picker's ＋ new folder
+ * action. Single level on purpose (the listed folder IS the parent); names
+ * with path separators or Windows-illegal characters are rejected.
+ * Returns the new folder's absolute path.
+ */
+export function createDirectory(rawParent: string, rawName: string): { path: string } {
+  const parent = resolveUserPath(String(rawParent ?? '').trim());
+  if (!parent) throw new Error('open a folder first — a new one is created inside the folder being listed');
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(parent);
+  } catch {
+    throw new Error(`folder not found: ${parent}`);
+  }
+  if (!stat.isDirectory()) throw new Error(`not a folder: ${parent}`);
+
+  const name = String(rawName ?? '').trim();
+  if (!name) throw new Error('type a folder name first');
+  if (name.length > 64) throw new Error('folder names are limited to 64 characters');
+  if (name === '.' || name === '..') throw new Error(`"${name}" is not a valid folder name`);
+  if (INVALID_NAME_CHARS.test(name)) throw new Error('folder names cannot contain \\ / : * ? " < > | or control characters');
+  if (/[. ]$/.test(name)) throw new Error('folder names cannot end with a dot or a space');
+  if (RESERVED_WINDOWS_NAME.test(name)) throw new Error(`"${name}" is a reserved Windows name — pick something else`);
+
+  const target = path.join(parent, name);
+  try {
+    fs.mkdirSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`"${name}" already exists in ${parent}`);
+    throw new Error(`couldn't create "${name}" — ${(err as Error).message}`);
+  }
+  return { path: target };
+}

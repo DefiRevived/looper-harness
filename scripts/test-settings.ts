@@ -251,6 +251,47 @@ try {
   check('missing folder → 400 with message', missing.status === 400, String(missing.status));
   const relative = await fetch(`${base}/api/fs/dirs?path=${encodeURIComponent('relative/nope')}`);
   check('relative path → 400 (absolute required)', relative.status === 400, String(relative.status));
+
+  const madeName = 'created-by-picker';
+  const made = await fetch(`${base}/api/fs/mkdir`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: probeDir, name: madeName }),
+  });
+  const madeBody = (await made.json()) as { ok?: boolean; path?: string };
+  check(
+    'mkdir creates a folder inside the listed one',
+    made.status === 200 && madeBody.ok === true && madeBody.path === path.join(probeDir, madeName) && fs.existsSync(path.join(probeDir, madeName)),
+    madeBody.path ?? '',
+  );
+  const madeListing = (await (await fetch(`${base}/api/fs/dirs?path=${encodeURIComponent(probeDir)}`)).json()) as {
+    listing?: { entries?: { name: string }[] };
+  };
+  check('new folder shows up in the listing', (madeListing.listing?.entries ?? []).some((e) => e.name === madeName));
+  const dup = await fetch(`${base}/api/fs/mkdir`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: probeDir, name: madeName }),
+  });
+  check('duplicate name → 400', dup.status === 400, String(dup.status));
+  const badName = await fetch(`${base}/api/fs/mkdir`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: probeDir, name: 'sneaky/../escape' }),
+  });
+  check('separators in the name → 400', badName.status === 400, String(badName.status));
+  const reserved = await fetch(`${base}/api/fs/mkdir`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: probeDir, name: 'CON' }),
+  });
+  check('reserved Windows name → 400', reserved.status === 400, String(reserved.status));
+  const noParent = await fetch(`${base}/api/fs/mkdir`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: path.join(probeDir, 'missing'), name: 'x' }),
+  });
+  check('missing parent folder → 400', noParent.status === 400, String(noParent.status));
   fs.rmSync(probeDir, { recursive: true, force: true });
 
   for (const dir of [tmpData2, tmpBuilds2]) fs.rmSync(dir, { recursive: true, force: true });
