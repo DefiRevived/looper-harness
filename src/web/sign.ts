@@ -1,6 +1,10 @@
 /* SIWA signer page — builds the exact message, asks the injected wallet to sign
  * it (personal_sign), and outputs the ready-to-run registration command.
- * The private key never touches this page. */
+ * The private key never touches this page.
+ *
+ * Notes for this repo: this page is a dev-mode utility (not part of the prod
+ * build), the companion `helixa-register.ps1` script is NOT bundled here, and
+ * PAY_TO must be configured (see below) before the payment step can run. */
 
 interface InjectedProvider {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>;
@@ -24,11 +28,16 @@ const copyBtn = $<HTMLButtonElement>('copy');
 
 const provider = (window as unknown as { ethereum?: InjectedProvider }).ethereum;
 
-// x402 v2 terms captured from Helixa's live 402 challenge (their paid mint flow)
+// x402 v2 terms captured from Helixa's live 402 challenge (their paid mint flow).
+// PAY_TO is the payment destination for the flow — set it to YOUR service's
+// x402 pay-to address before using the payment step; the placeholder below is
+// intentionally not an address and blocks the flow until configured.
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const PAY_TO = '0x339559a2d1cd15059365fc7bd36b3047bba480e0';
+const PAY_TO = '0xYOUR_PAY_TO_ADDRESS';
 const CHAIN_ID = 8453;
 const PRICE = '1000000'; // 1.00 USDC (6 decimals)
+
+const payToConfigured = (): boolean => /^0x[0-9a-fA-F]{40}$/.test(PAY_TO);
 
 let address: string | null = null;
 let timestamp = String(Math.floor(Date.now() / 1000));
@@ -108,6 +117,10 @@ signBtn.addEventListener('click', async () => {
 
 payBtn.addEventListener('click', async () => {
   if (!provider || !address || !siwaSignature) return;
+  if (!payToConfigured()) {
+    payStatusEl.textContent = 'pay-to address not configured — set PAY_TO in src/web/sign.ts to the x402 service\'s address first.';
+    return;
+  }
   try {
     payStatusEl.textContent = 'switching wallet to Base…';
     try {
@@ -195,5 +208,9 @@ copyBtn.addEventListener('click', async () => {
 });
 
 render();
+if (!payToConfigured()) {
+  payStatusEl.textContent = 'pay-to address not configured — set PAY_TO in src/web/sign.ts before using the payment step.';
+  payBtn.title = 'set PAY_TO in src/web/sign.ts first';
+}
 
 export {};
