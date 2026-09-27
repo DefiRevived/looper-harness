@@ -19,7 +19,16 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
-export type StreamStep = { type: 'text'; text: string } | { type: 'tool_calls'; toolCalls: ToolCall[] };
+export type StreamStep =
+  | { type: 'text'; text: string }
+  // The model's live reasoning stream (DeepSeek `reasoning_content`). Display-
+  // only by design: never persisted, never fed back — providers reject it in
+  // history, and the console shows it as it happens, then lets it go.
+  | { type: 'reasoning'; text: string }
+  // While the model composes a (possibly huge) tool call, nothing else streams
+  // — these throttled pulses keep the console honest about what is happening.
+  | { type: 'tool_progress'; name: string; argsChars: number }
+  | { type: 'tool_calls'; toolCalls: ToolCall[] };
 
 export type LlmMode = 'live' | 'mock';
 
@@ -35,9 +44,9 @@ export function llmMode(): LlmMode {
  */
 export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], opts?: { signal?: AbortSignal }): AsyncGenerator<StreamStep> {
   if (llmMode() === 'mock') {
-    for await (const chunk of mockStream(messages)) {
+    for await (const step of mockStream(messages)) {
       if (opts?.signal?.aborted) throw new Error('stopped by operator');
-      yield { type: 'text', text: chunk };
+      yield step;
     }
     return;
   }
@@ -89,6 +98,7 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
     const pending = new Map<number, ToolCall>();
     let buffer = '';
     let finished = false;
+    let lastCallProgress = 0;
 
     while (!finished) {
       const { done, value } = await reader.read();
@@ -111,11 +121,13 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
             choices?: Array<{
               delta?: {
                 content?: string;
+                reasoning_content?: string;
                 tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
               };
             }>;
           };
           const delta = parsed.choices?.[0]?.delta;
+          if (delta?.reasoning_content) yield { type: 'reasoning', text: delta.reasoning_content };
           if (delta?.content) yield { type: 'text', text: delta.content };
           for (const frag of delta?.tool_calls ?? []) {
             const idx = frag.index ?? 0;
@@ -124,6 +136,20 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
             if (frag.function?.name) acc.function.name += frag.function.name;
             if (frag.function?.arguments) acc.function.arguments += frag.function.arguments;
             pending.set(idx, acc);
+          }
+          // A big tool call (whole-file writes, multi-KB arguments) can compose
+          // for minutes with nothing else on the wire — pulse its progress so
+          // the console can show that the model is still writing.
+          if (delta?.tool_calls?.length && pending.size > 0) {
+            const now = Date.now();
+            if (now - lastCallProgress >= 900) {
+              const argsChars = [...pending.values()].reduce((n, c) => n + c.function.arguments.length, 0);
+              if (argsChars >= 120) {
+                lastCallProgress = now;
+                const names = [...pending.values()].map((c) => c.function.name).filter(Boolean);
+                yield { type: 'tool_progress', name: names.join(' + ') || 'tool call', argsChars };
+              }
+            }
           }
         } catch {
           // ignore keep-alive / partial frames
@@ -161,11 +187,21 @@ export async function completeReply(messages: ChatMessage[]): Promise<string> {
 // configured. Never pretends to be the live model — replies are tagged.
 // ---------------------------------------------------------------------------
 
-async function* mockStream(messages: ChatMessage[]): AsyncGenerator<string> {
+async function* mockStream(messages: ChatMessage[]): AsyncGenerator<StreamStep> {
+  // The mock brain never pretends: its "thought stream" says exactly what it is.
+  const thoughts = [
+    'mock brain — no API key, so this thought stream is canned.\n',
+    'a live key (setup ⚙) streams the real reasoning here, token by token.\n',
+    'classifying the request and picking a working order…\n',
+  ];
+  for (const line of thoughts) {
+    yield { type: 'reasoning', text: line };
+    await new Promise((resolve) => setTimeout(resolve, 90));
+  }
   const text = mockReply(messages);
   const chunk = 6;
   for (let i = 0; i < text.length; i += chunk) {
-    yield text.slice(i, i + chunk);
+    yield { type: 'text', text: text.slice(i, i + chunk) };
     await new Promise((resolve) => setTimeout(resolve, 12));
   }
 }

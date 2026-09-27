@@ -888,6 +888,69 @@ input:focus {
   padding: 3px 10px;
 }
 
+.tool-note.tool-running {
+  color: var(--amber);
+  border-color: rgba(255, 193, 77, 0.45);
+  animation: tool-pulse 1.2s ease-in-out infinite;
+}
+
+.tool-note.tool-err {
+  color: #ff8f83;
+  border-color: rgba(255, 143, 131, 0.45);
+}
+
+.tool-note.tool-progress {
+  color: var(--blue);
+  border-style: dotted;
+}
+
+@keyframes tool-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ---------- live thought stream ---------- */
+
+.thought-stream {
+  align-self: flex-start;
+  max-width: 86%;
+  border: 1px solid var(--border);
+  border-left: 2px solid rgba(77, 184, 255, 0.55);
+  background: rgba(77, 184, 255, 0.05);
+  border-radius: 8px;
+  padding: 7px 11px;
+}
+
+.thought-head {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--blue);
+  cursor: pointer;
+  user-select: none;
+}
+
+.thought-stream.live .thought-head::after {
+  content: '▍';
+  color: var(--blue);
+  animation: blink 1s steps(1) infinite;
+}
+
+.thought-body {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.thought-stream.closed .thought-body {
+  display: none;
+}
+
 /* ---------- side column (vitals + activity) ---------- */
 
 .side-col {

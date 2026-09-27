@@ -51,6 +51,10 @@ sign the gas-free ownership message, and the runtime loads its identity, codex a
   (`web_search` / `web_fetch` / `lookup_contract`), chain reads (`fetch_contract_abi` / `read_contract` /
   `simulate_call` / `tx_status`), markets (`market_price`), wallets (`read_wallet`), memory, tasks, locks,
   versions and builds.
+- **Live thought stream** — the console shows the brain working in real time: the model's reasoning streams
+  into a live "thought" block (DeepSeek reasoning mode), a composing pulse appears while a big tool call is
+  still being written, and every tool run reports a receipt — start, heartbeat while running, then result and
+  duration. Reasoning is display-only: never stored, never replayed into context.
 - **Build workspace** — the agent builds real web projects under `data/artifacts/`: single pages, multi-file
   projects, or **real npm projects** (package.json + allowlisted deps + `npm install` + build script whose
   `dist/` is what gets previewed and hosted). Includes sandboxed preview, static self-containment check,

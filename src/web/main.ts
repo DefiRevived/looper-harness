@@ -214,6 +214,123 @@ function appendBubble(role: 'user' | 'agent' | 'system' | 'error', text: string)
   return bubble;
 }
 
+/** Compact byte count for the live tool feed. */
+function fmtBytes(n: number): string {
+  return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
+}
+
+/** Compact duration for the live tool feed. */
+function fmtMs(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/**
+ * Live thought stream: the model's reasoning rendered as it arrives
+ * (DeepSeek `reasoning_content`). Display only — never stored, never sent
+ * back. Click the header to fold/unfold; folds itself away when empty.
+ */
+class ThoughtStream {
+  readonly el: HTMLDivElement;
+  private readonly head: HTMLDivElement;
+  private readonly body: HTMLPreElement;
+  private live = true;
+  private lastWasThought = false;
+
+  constructor(insert: (el: HTMLElement) => void) {
+    this.el = document.createElement('div');
+    this.el.className = 'thought-stream live';
+    this.head = document.createElement('div');
+    this.head.className = 'thought-head';
+    this.head.textContent = '🧠 thought stream — live';
+    this.body = document.createElement('pre');
+    this.body.className = 'thought-body';
+    this.head.addEventListener('click', () => this.el.classList.toggle('closed'));
+    this.el.append(this.head, this.body);
+    insert(this.el);
+  }
+
+  append(text: string): void {
+    if (!this.lastWasThought && this.body.textContent) this.body.textContent += '\n\n';
+    this.body.textContent += text;
+    this.lastWasThought = true;
+    this.body.scrollTop = this.body.scrollHeight;
+  }
+
+  /** Called on non-thought events so the next reasoning phase reads as a new block. */
+  breakPhase(): void {
+    this.lastWasThought = false;
+  }
+
+  finish(): void {
+    if (!this.live) return;
+    this.live = false;
+    this.el.classList.remove('live');
+    if (!this.body.textContent?.trim()) {
+      this.el.remove();
+      return;
+    }
+    this.head.textContent = '🧠 thought stream — click to fold';
+  }
+}
+
+/** Live tool feed: composing pulses, running notes, heartbeat ticks, done receipts. */
+class ToolFeed {
+  private progressEl: HTMLDivElement | null = null;
+  private activeEl: HTMLDivElement | null = null;
+
+  constructor(private readonly insert: (el: HTMLElement) => void) {}
+
+  /** The model is still writing the call itself — nothing runnable exists yet. */
+  progress(name: string, argsChars: number): void {
+    if (!this.progressEl) {
+      this.progressEl = document.createElement('div');
+      this.progressEl.className = 'tool-note tool-progress';
+      this.insert(this.progressEl);
+    }
+    this.progressEl.textContent = `⏳ composing ${name} — ${fmtBytes(argsChars)}`;
+  }
+
+  start(name: string, note?: string): void {
+    this.clearProgress();
+    const el = document.createElement('div');
+    el.className = 'tool-note tool-running';
+    el.dataset.base = note ? `${name} — ${note}` : name;
+    el.textContent = `⚙ ${el.dataset.base}`;
+    this.insert(el);
+    this.activeEl = el;
+  }
+
+  tick(ms: number): void {
+    if (this.activeEl) this.activeEl.textContent = `⚙ ${this.activeEl.dataset.base} · ${fmtMs(ms)}`;
+  }
+
+  done(name: string, ms: number, ok: boolean, note?: string): void {
+    this.clearProgress();
+    const el = this.activeEl ?? document.createElement('div');
+    if (!this.activeEl) {
+      el.className = 'tool-note';
+      this.insert(el);
+    }
+    this.activeEl = null;
+    el.classList.remove('tool-running');
+    el.classList.toggle('tool-err', !ok);
+    el.textContent = `${ok ? '✓' : '✕'} ${note ? `${name} — ${note}` : name} · ${fmtMs(ms)}`;
+  }
+
+  finish(): void {
+    this.clearProgress();
+    if (this.activeEl) {
+      this.activeEl.classList.remove('tool-running');
+      this.activeEl = null;
+    }
+  }
+
+  private clearProgress(): void {
+    this.progressEl?.remove();
+    this.progressEl = null;
+  }
+}
+
 interface ArtifactInfo {
   id: string;
   title: string;
@@ -1243,6 +1360,12 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
     const agentLine = appendBuildLine(chatLogEl, 'agent', '');
     agentLine.classList.add('streaming');
     let content = '';
+    let thoughts: ThoughtStream | null = null;
+    const tools = new ToolFeed((el) => chatLogEl.appendChild(el));
+    const finishStreamView = (): void => {
+      thoughts?.finish();
+      tools.finish();
+    };
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -1274,18 +1397,33 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
             message?: string;
             name?: string;
             id?: string;
+            note?: string;
+            ok?: boolean;
+            ms?: number;
+            argsChars?: number;
             artifact?: ArtifactInfo;
           };
           if (event.type === 'delta' && event.text) {
             content += event.text;
             agentLine.textContent = content;
+            thoughts?.breakPhase();
             chatLogEl.scrollTop = chatLogEl.scrollHeight;
+          } else if (event.type === 'thought' && event.text) {
+            thoughts ??= new ThoughtStream((el) => chatLogEl.appendChild(el));
+            thoughts.append(event.text);
+            chatLogEl.scrollTop = chatLogEl.scrollHeight;
+          } else if (event.type === 'tool_progress' && event.name) {
+            tools.progress(event.name, event.argsChars ?? 0);
+          } else if (event.type === 'tool_tick') {
+            tools.tick(event.ms ?? 0);
           } else if (event.type === 'error') {
             content += `\n[error] ${event.message ?? 'unknown'}`;
             agentLine.textContent = content;
           } else if (event.type === 'tool' && event.name) {
-            appendBuildLine(chatLogEl, 'tool', `⚙ ${event.name}`);
+            tools.start(event.name, event.note);
             bumpActivity(event.name);
+          } else if (event.type === 'tool_done' && event.name) {
+            tools.done(event.name, event.ms ?? 0, event.ok !== false, event.note);
           } else if (event.type === 'artifact' && event.artifact) {
             if (event.artifact.id === artifact.id) {
               // update_build — refresh this card's preview in place.
@@ -1316,6 +1454,7 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
       }
     } finally {
       agentLine.classList.remove('streaming');
+      finishStreamView();
       buildStreaming = false;
       buildAbort = null;
       chatSend.disabled = false;
@@ -1477,6 +1616,12 @@ async function sendMessage(text: string): Promise<void> {
   appendBubble('user', text);
   const bubble = appendBubble('agent', '');
   bubble.classList.add('streaming');
+  let thoughts: ThoughtStream | null = null;
+  const tools = new ToolFeed((el) => chatLog.insertBefore(el, bubble));
+  const finishStreamView = (): void => {
+    thoughts?.finish();
+    tools.finish();
+  };
 
   try {
     const res = await fetch('/api/chat', {
@@ -1511,21 +1656,33 @@ async function sendMessage(text: string): Promise<void> {
           text?: string;
           message?: string;
           name?: string;
+          note?: string;
+          ok?: boolean;
+          ms?: number;
+          argsChars?: number;
           artifact?: ArtifactInfo;
         };
         if (event.type === 'delta' && event.text) {
           content += event.text;
           bubble.textContent = content;
+          thoughts?.breakPhase();
           chatLog.scrollTop = chatLog.scrollHeight;
+        } else if (event.type === 'thought' && event.text) {
+          thoughts ??= new ThoughtStream((el) => chatLog.insertBefore(el, bubble));
+          thoughts.append(event.text);
+          chatLog.scrollTop = chatLog.scrollHeight;
+        } else if (event.type === 'tool_progress' && event.name) {
+          tools.progress(event.name, event.argsChars ?? 0);
+        } else if (event.type === 'tool_tick') {
+          tools.tick(event.ms ?? 0);
         } else if (event.type === 'error') {
           content += `\n[error] ${event.message ?? 'unknown'}`;
           bubble.textContent = content;
         } else if (event.type === 'tool' && event.name) {
           bumpActivity(event.name);
-          const note = document.createElement('div');
-          note.className = 'tool-note';
-          note.textContent = `⚙ ${event.name}`;
-          chatLog.insertBefore(note, bubble);
+          tools.start(event.name, event.note);
+        } else if (event.type === 'tool_done' && event.name) {
+          tools.done(event.name, event.ms ?? 0, event.ok !== false, event.note);
         } else if (event.type === 'artifact' && event.artifact) {
           addArtifact(event.artifact, { expand: true });
           bumpBuildBadge();
@@ -1543,6 +1700,7 @@ async function sendMessage(text: string): Promise<void> {
     }
   } finally {
     bubble.classList.remove('streaming');
+    finishStreamView();
     streaming = false;
     activeAbort = null;
     chatSend.disabled = false;

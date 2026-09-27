@@ -1,7 +1,7 @@
 import { loadLooper, type LooperBundle } from './codex.js';
 import { buildSystemPrompt } from './persona.js';
 import { completeReply, streamReply, streamSteps, type ChatMessage, type ToolCall } from './llm.js';
-import { buildFileList, executeToolCall, parseBuildThread, readBuildSource, sessionDirName, toolSpecsForSurface, type Artifact, type ToolContext, type ToolSurface } from './tools.js';
+import { buildFileList, executeToolCall, parseBuildThread, readBuildSource, sessionDirName, toolSpecsForSurface, type Artifact, type ToolContext, type ToolResult, type ToolSurface } from './tools.js';
 import { buildMemoryDigest, locksFor } from './memory.js';
 import { detectSecretRequest } from './security.js';
 import { maybeSummarize } from './episodes.js';
@@ -39,6 +39,33 @@ const GROUP_CONTEXT = [
  */
 const LEGACY_MOCK_TAG = /\s*—\s*#[0-9]+\s*·\s*\[mock mode[^\]]*\]/g;
 const sanitizeForContext = (content: string): string => content.replace(LEGACY_MOCK_TAG, '').trimEnd();
+
+/** Short human hint from a tool call's arguments, for the console's live feed. */
+function toolArgsNote(call: ToolCall): string | undefined {
+  try {
+    const args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
+    for (const key of ['file', 'rel', 'path', 'build_id', 'id', 'query', 'url', 'address', 'name', 'command']) {
+      const v = args[key];
+      if (typeof v === 'string' && v.trim()) {
+        const clean = v.trim().replace(/\s+/g, ' ');
+        return clean.length > 64 ? `${clean.slice(0, 64)}…` : clean;
+      }
+    }
+  } catch {
+    // unparseable args — the note is cosmetic; the tool itself will report.
+  }
+  return undefined;
+}
+
+/** First non-blank line of a tool result, flattened + truncated for the feed. */
+function firstLine(text: string): string | undefined {
+  const line = (text.split('\n').find((l) => l.trim()) ?? '').trim().replace(/\s+/g, ' ');
+  if (!line) return undefined;
+  return line.length > 120 ? `${line.slice(0, 120)}…` : line;
+}
+
+/** Resolves to null after ms — races long tool executions so ticks can stream. */
+const sleepTick = (ms: number): Promise<null> => new Promise((resolve) => setTimeout(() => resolve(null), ms));
 
 async function prepareTurn(
   tokenId: number,
@@ -113,7 +140,15 @@ export async function* streamAgentReply(
 /** Event stream for tool-enabled turns (web console). */
 export type AgentEvent =
   | { type: 'delta'; text: string }
-  | { type: 'tool'; name: string }
+  // Live reasoning stream — display only, never persisted or fed back.
+  | { type: 'thought'; text: string }
+  // Tool lifecycle: start (note = short args hint) → optional heartbeat ticks
+  // while it runs → done (duration + first-line result). Plus composing pulses
+  // while the model is still writing the call itself.
+  | { type: 'tool'; name: string; note?: string }
+  | { type: 'tool_progress'; name: string; argsChars: number }
+  | { type: 'tool_tick'; name: string; ms: number }
+  | { type: 'tool_done'; name: string; ms: number; ok: boolean; note?: string }
   | { type: 'artifact'; artifact: Artifact }
   | { type: 'artifact-removed'; id: string };
 
@@ -219,7 +254,11 @@ export async function* streamAgentReplyWithTools(
           roundText += step.text;
           full += step.text;
           yield { type: 'delta', text: step.text };
-        } else {
+        } else if (step.type === 'reasoning') {
+          yield { type: 'thought', text: step.text };
+        } else if (step.type === 'tool_progress') {
+          yield { type: 'tool_progress', name: step.name, argsChars: step.argsChars };
+        } else if (step.type === 'tool_calls') {
           pendingCalls = step.toolCalls;
         }
       }
@@ -228,9 +267,28 @@ export async function* streamAgentReplyWithTools(
 
       messages.push({ role: 'assistant', content: roundText, tool_calls: pendingCalls });
       for (const call of pendingCalls) {
-        yield { type: 'tool', name: call.function.name };
-        const result = await executeToolCall(call, ctx);
+        yield { type: 'tool', name: call.function.name, note: toolArgsNote(call) };
+        const startedAt = Date.now();
+        const execution = executeToolCall(call, ctx);
+        let result: ToolResult;
+        for (;;) {
+          const settled = await Promise.race<ToolResult | null>([execution, sleepTick(5_000)]);
+          if (settled) {
+            result = settled;
+            break;
+          }
+          // Long tools (npm installs, headless renders) heartbeat instead of
+          // going quiet — the console shows elapsed time live.
+          yield { type: 'tool_tick', name: call.function.name, ms: Date.now() - startedAt };
+        }
         logActivity(sessionKey, call.function.name);
+        yield {
+          type: 'tool_done',
+          name: call.function.name,
+          ms: Date.now() - startedAt,
+          ok: !/^(tool .+ failed|unknown tool|tool .+ received unparseable)/i.test(result.modelText),
+          note: firstLine(result.modelText),
+        };
         if (result.artifact) yield { type: 'artifact', artifact: result.artifact };
         if (result.deleted) yield { type: 'artifact-removed', id: result.deleted };
         messages.push({ role: 'tool', tool_call_id: call.id, content: result.modelText });
@@ -253,6 +311,8 @@ export async function* streamAgentReplyWithTools(
         if (step.type === 'text') {
           full += step.text;
           yield { type: 'delta', text: step.text };
+        } else if (step.type === 'reasoning') {
+          yield { type: 'thought', text: step.text };
         }
       }
       if (full.length === before) {
@@ -265,6 +325,8 @@ export async function* streamAgentReplyWithTools(
           if (step.type === 'text') {
             full += step.text;
             yield { type: 'delta', text: step.text };
+          } else if (step.type === 'reasoning') {
+            yield { type: 'thought', text: step.text };
           }
         }
       }
@@ -307,7 +369,7 @@ export async function agentReplyWithTools(
       if (step.type === 'text') {
         roundText += step.text;
         full += step.text;
-      } else {
+      } else if (step.type === 'tool_calls') {
         pendingCalls = step.toolCalls;
       }
     }
