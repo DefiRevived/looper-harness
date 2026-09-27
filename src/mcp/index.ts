@@ -41,7 +41,7 @@ async function statusText(): Promise<string> {
     `owner: ${bundle.identity.owner ?? 'unknown'} · contract: ${bundle.identity.contract}`,
     `voice: ${p.voice ?? '—'}`,
     `risk: ${p.risk_profile ?? '—'}${p.risk_tolerance != null ? ` (${p.risk_tolerance}/10)` : ''} · autonomy: ${p.autonomy_profile ?? '—'}${p.autonomy_level != null ? ` (${p.autonomy_level}/10)` : ''}`,
-    `brain: ${llmMode() === 'live' ? `live (${config.deepseek.model})` : 'mock (no DEEPSEEK_API_KEY)'}`,
+    `brain: ${llmMode() === 'live' ? `live (${config.deepseek.model})` : 'mock (no DeepSeek API key configured)'}`,
     `helixa cred: ${cred ? `${cred.score}/${cred.scoreScale} · ${cred.tier}${cred.riskLevel ? ` · ${cred.riskLevel} risk` : ''}` : 'not published for this agent yet'}`,
     `erc-8004: ${bindings.bound ? 'bound' : 'unbound'}${bindings.agentId ? ` · agent #${bindings.agentId}` : ''} · registry ${bindings.identityRegistry ?? '—'}`,
     `erc-6551 account: ${bindings.tokenBoundAccount ?? '—'}`,

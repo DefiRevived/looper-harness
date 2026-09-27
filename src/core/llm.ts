@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { llmApiKey } from './settings.js';
 
 export interface ToolCall {
   id: string;
@@ -23,7 +24,7 @@ export type StreamStep = { type: 'text'; text: string } | { type: 'tool_calls'; 
 export type LlmMode = 'live' | 'mock';
 
 export function llmMode(): LlmMode {
-  return config.deepseek.apiKey ? 'live' : 'mock';
+  return llmApiKey() ? 'live' : 'mock';
 }
 
 /**
@@ -66,7 +67,7 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.deepseek.apiKey}`,
+        Authorization: `Bearer ${llmApiKey()}`,
       },
       body: JSON.stringify({
         model: config.deepseek.model,

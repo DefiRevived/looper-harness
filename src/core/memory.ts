@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { MemoryStore, ReMEM } from '@darksol/remem';
 import { config } from './config.js';
-import { dataPath } from './settings.js';
+import { dataPath, llmApiKey } from './settings.js';
 
 /**
  * Long-term agent memory, backed by Darksol's @darksol/remem package (its
@@ -47,7 +47,7 @@ async function getMem(): Promise<MemoryStore> {
   return store;
 }
 
-let smartInstance: { smart: ReMEM; stamp: string } | null = null;
+let smartInstance: { smart: ReMEM; stamp: string; llmKey: string } | null = null;
 
 /**
  * ReMEM's smart layer over the SAME SQLite file MemoryStore uses: intake
@@ -57,10 +57,11 @@ let smartInstance: { smart: ReMEM; stamp: string } | null = null;
  */
 async function getSmart(): Promise<ReMEM> {
   const stamp = dbStamp();
-  if (smartInstance && smartInstance.stamp === stamp) return smartInstance.smart;
+  const llmKey = llmApiKey();
+  if (smartInstance && smartInstance.stamp === stamp && smartInstance.llmKey === llmKey) return smartInstance.smart;
   // DeepSeek is OpenAI-compatible — the dream pass uses this for its artifact.
-  const llm = config.deepseek.apiKey
-    ? { type: 'openai' as const, apiKey: config.deepseek.apiKey, model: config.deepseek.model, baseUrl: config.deepseek.baseUrl }
+  const llm = llmKey
+    ? { type: 'openai' as const, apiKey: llmKey, model: config.deepseek.model, baseUrl: config.deepseek.baseUrl }
     : undefined;
   fs.mkdirSync(path.dirname(memDbPath()), { recursive: true });
   const smart = new ReMEM({
@@ -70,7 +71,7 @@ async function getSmart(): Promise<ReMEM> {
     ...(llm ? { llm } : {}),
   });
   await smart.init();
-  smartInstance = { smart, stamp };
+  smartInstance = { smart, stamp, llmKey };
   return smart;
 }
 

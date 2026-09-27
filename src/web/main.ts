@@ -117,6 +117,9 @@ const settingsBuildsEffective = $<HTMLParagraphElement>('settings-builds-effecti
 const settingsStatus = $<HTMLParagraphElement>('settings-status');
 const settingsSave = $<HTMLButtonElement>('settings-save');
 const settingsReset = $<HTMLButtonElement>('settings-reset');
+const settingsApiKey = $<HTMLInputElement>('settings-api-key');
+const settingsKeyStatus = $<HTMLParagraphElement>('settings-key-status');
+const settingsKeyClear = $<HTMLButtonElement>('settings-key-clear');
 const setupEl = $<HTMLDivElement>('setup');
 const setupDataDir = $<HTMLInputElement>('setup-data-dir');
 const setupDataEffective = $<HTMLParagraphElement>('setup-data-effective');
@@ -125,6 +128,8 @@ const setupBuildsEffective = $<HTMLParagraphElement>('setup-builds-effective');
 const setupStatus = $<HTMLParagraphElement>('setup-status');
 const setupDefaults = $<HTMLButtonElement>('setup-defaults');
 const setupSave = $<HTMLButtonElement>('setup-save');
+const setupApiKey = $<HTMLInputElement>('setup-api-key');
+const setupKeyStatus = $<HTMLParagraphElement>('setup-key-status');
 const toastEl = $<HTMLDivElement>('toast');
 const buildCards = new Map<string, HTMLElement>();
 let unseenBuilds = 0;
@@ -802,7 +807,25 @@ interface DirInfo {
 interface SetupState {
   dataDir: DirInfo;
   buildsDir: DirInfo;
+  llmKey: LLMKeyInfo;
   setupComplete: boolean;
+}
+
+interface LLMKeyInfo {
+  configured: boolean;
+  masked: string | null;
+  source: 'env' | 'settings' | null;
+}
+
+function renderLlmKey(info: LLMKeyInfo): void {
+  const text = info.configured
+    ? `key saved (${info.masked}) — the live brain is on${info.source === 'env' ? ' · set by DEEPSEEK_API_KEY in .env (overrides the stored key)' : ' · stored locally'}`
+    : 'no key yet — replies come from the labeled mock brain (canned text, not your agent)';
+  settingsKeyStatus.textContent = text;
+  setupKeyStatus.textContent = text;
+  const placeholder = info.configured ? 'already set — type to replace' : 'sk-…';
+  settingsApiKey.placeholder = placeholder;
+  setupApiKey.placeholder = placeholder;
 }
 
 function renderDir(input: HTMLInputElement, effectiveEl: HTMLElement, d: DirInfo, envVar: string): void {
@@ -822,6 +845,7 @@ function renderSetup(state: SetupState): void {
   renderDir(settingsBuildsDir, settingsBuildsEffective, state.buildsDir, 'LOOPER_BUILDS_DIR');
   renderDir(setupDataDir, setupDataEffective, state.dataDir, 'LOOPER_DATA_DIR');
   renderDir(setupBuildsDir, setupBuildsEffective, state.buildsDir, 'LOOPER_BUILDS_DIR');
+  renderLlmKey(state.llmKey);
 }
 
 async function openSettings(): Promise<void> {
@@ -829,6 +853,7 @@ async function openSettings(): Promise<void> {
   settingsStatus.textContent = '';
   settingsDataEffective.textContent = 'loading…';
   settingsBuildsEffective.textContent = 'loading…';
+  settingsApiKey.value = '';
   try {
     renderSetup(await getJson<SetupState>('/api/settings'));
   } catch (err) {
@@ -844,16 +869,34 @@ async function saveSettings(): Promise<void> {
   settingsStatus.textContent = '';
   settingsSave.disabled = true;
   try {
+    const newKey = settingsApiKey.value.trim();
     const state = await postJson<SetupState & { ok: boolean }>('/api/settings', {
       dataDir: settingsDataDir.value.trim() || null,
       buildsDir: settingsBuildsDir.value.trim() || null,
+      ...(newKey ? { deepseekApiKey: newKey } : {}),
     });
+    settingsApiKey.value = '';
     renderSetup(state);
-    toast(`storage updated — data: ${state.dataDir.effective}`);
+    toast(state.llmKey.configured ? 'settings saved — the brain is live' : 'settings saved');
   } catch (err) {
     settingsStatus.textContent = (err as Error).message;
   } finally {
     settingsSave.disabled = false;
+  }
+}
+
+async function clearApiKey(): Promise<void> {
+  settingsStatus.textContent = '';
+  settingsKeyClear.disabled = true;
+  try {
+    const state = await postJson<SetupState & { ok: boolean }>('/api/settings', { deepseekApiKey: null });
+    settingsApiKey.value = '';
+    renderSetup(state);
+    toast('API key removed — back to the mock brain');
+  } catch (err) {
+    settingsStatus.textContent = (err as Error).message;
+  } finally {
+    settingsKeyClear.disabled = false;
   }
 }
 
@@ -876,19 +919,26 @@ async function saveSetup(useDefaults: boolean): Promise<void> {
   setupSave.disabled = true;
   setupDefaults.disabled = true;
   try {
+    const newKey = setupApiKey.value.trim();
     const state = await postJson<SetupState & { ok: boolean }>(
       '/api/settings',
       useDefaults
-        ? { dataDir: null, buildsDir: null, setupComplete: true }
+        ? { dataDir: null, buildsDir: null, setupComplete: true, ...(newKey ? { deepseekApiKey: newKey } : {}) }
         : {
             dataDir: setupDataDir.value.trim() || null,
             buildsDir: setupBuildsDir.value.trim() || null,
             setupComplete: true,
+            ...(newKey ? { deepseekApiKey: newKey } : {}),
           },
     );
+    setupApiKey.value = '';
     renderSetup(state);
     setupEl.classList.add('hidden');
-    toast('setup complete — your data stays on this machine');
+    toast(
+      state.llmKey.configured
+        ? 'setup complete — brain is live on DeepSeek'
+        : 'setup complete — running the mock brain (add a key anytime via ⚙)',
+    );
     startConsole();
   } catch (err) {
     setupStatus.textContent = (err as Error).message;
@@ -1650,6 +1700,7 @@ settingsModal.addEventListener('click', (event) => {
 });
 settingsSave.addEventListener('click', () => void saveSettings());
 settingsReset.addEventListener('click', () => void resetSettings());
+settingsKeyClear.addEventListener('click', () => void clearApiKey());
 setupSave.addEventListener('click', () => void saveSetup(false));
 setupDefaults.addEventListener('click', () => void saveSetup(true));
 

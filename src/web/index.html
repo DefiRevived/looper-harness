@@ -22,6 +22,14 @@
         <label class="settings-label" for="setup-builds-dir">builds &amp; projects directory</label>
         <input id="setup-builds-dir" type="text" placeholder="…" autocomplete="off" spellcheck="false" />
         <p class="settings-hint" id="setup-builds-effective">—</p>
+        <label class="settings-label" for="setup-api-key">deepseek api key <span class="setup-sub">the agent's brain</span></label>
+        <input id="setup-api-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+        <p class="settings-hint" id="setup-key-status">—</p>
+        <p class="settings-hint">
+          Stored locally in <code>looper.config.json</code> and used to call DeepSeek straight from this
+          machine. Without a key the harness runs a labeled mock brain — canned replies, not your agent's
+          persona. Get one at <code>platform.deepseek.com</code>.
+        </p>
         <p class="settings-error" id="setup-status"></p>
         <div class="settings-actions">
           <button class="btn" type="button" id="setup-defaults">use the defaults</button>
@@ -220,8 +228,16 @@
             Where new builds and npm projects are created. Existing builds stay in the directory they were
             created in. <code>LOOPER_BUILDS_DIR</code> in <code>.env</code> overrides this setting.
           </p>
+          <label class="settings-label" for="settings-api-key">deepseek api key (brain)</label>
+          <input id="settings-api-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+          <p class="settings-hint" id="settings-key-status">—</p>
+          <p class="settings-hint">
+            Stored locally in <code>looper.config.json</code>; <code>DEEPSEEK_API_KEY</code> in
+            <code>.env</code> overrides it. Empty input = unchanged.
+          </p>
           <p class="settings-error" id="settings-status"></p>
           <div class="settings-actions">
+            <button class="btn btn-ghost" type="button" id="settings-key-clear">remove key</button>
             <button class="btn" type="button" id="settings-reset">reset to default</button>
             <button class="btn btn-accent" type="button" id="settings-save">save</button>
           </div>

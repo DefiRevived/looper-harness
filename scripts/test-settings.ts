@@ -11,8 +11,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { executeToolCall } from '../src/core/tools.js';
-import { applySettings, buildsRoot, dataPath, dataRoot, setupState } from '../src/core/settings.js';
+import { applySettings, buildsRoot, dataPath, dataRoot, llmKeyInfo, setupState } from '../src/core/settings.js';
 import * as store from '../src/core/store.js';
+import { completeReply, llmMode } from '../src/core/llm.js';
 
 // The config file lives at the CWD — refuse to run anywhere but the fork.
 if (!process.cwd().toLowerCase().endsWith('looper-harness')) {
@@ -81,6 +82,36 @@ try {
   const archived = fs.existsSync(dataPath('transcripts')) ? fs.readdirSync(dataPath('transcripts')) : [];
   check('transcript archived into the CUSTOM data dir', archived.some((f) => f.startsWith('web_998802')), archived.join(', '));
 
+  console.log('\n===== llm key (the brain) =====');
+  if (process.env.DEEPSEEK_API_KEY) {
+    console.log('(skipped — DEEPSEEK_API_KEY is set in this shell; env overrides the stored key)');
+  } else {
+    applySettings({ deepseekApiKey: 'sk-test-invalid-1234567890' });
+    const key1 = llmKeyInfo();
+    check(
+      'key stored locally + masked in reads',
+      key1.configured && key1.source === 'settings' && !!key1.masked && key1.masked.includes('…') && !key1.masked.includes('1234567890'),
+      key1.masked ?? '',
+    );
+    check('llmMode flips to live', llmMode() === 'live');
+    let err = '';
+    try {
+      await completeReply([{ role: 'user', content: 'ping' }]);
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    check('live path actually reaches DeepSeek (invalid key rejected upstream)', /401|auth|invalid/i.test(err), err.slice(0, 90));
+    let short = '';
+    try {
+      applySettings({ deepseekApiKey: 'sk-short' });
+    } catch (e) {
+      short = (e as Error).message;
+    }
+    check('too-short key rejected', short.includes("doesn't look like"), short);
+    applySettings({ deepseekApiKey: null });
+    check('key cleared → back to the mock brain', llmKeyInfo().configured === false && llmMode() === 'mock');
+  }
+
   console.log('\n===== reset =====');
   const reset = applySettings({ dataDir: null, buildsDir: null, setupComplete: false });
   check(
@@ -89,7 +120,7 @@ try {
   );
 } finally {
   try {
-    applySettings({ dataDir: null, buildsDir: null, setupComplete: false });
+    applySettings({ dataDir: null, buildsDir: null, deepseekApiKey: null, setupComplete: false });
   } catch {
     // ignore
   }
@@ -152,6 +183,26 @@ try {
     body: JSON.stringify({ dataDir: 'not-absolute' }),
   });
   check('invalid path → 400 with guidance', bad.status === 400, String(bad.status));
+
+  if (!process.env.DEEPSEEK_API_KEY) {
+    const keyPost = await fetch(`${base}/api/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deepseekApiKey: 'sk-http-test-1234567890' }),
+    });
+    const keyBody = (await keyPost.json()) as { llmKey?: { configured?: boolean; masked?: string } };
+    check(
+      'API stores the brain key (masked in responses)',
+      keyPost.status === 200 && keyBody.llmKey?.configured === true && !(keyBody.llmKey?.masked ?? '').includes('1234567890'),
+      keyBody.llmKey?.masked ?? '',
+    );
+    const keyClear = await fetch(`${base}/api/settings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deepseekApiKey: null }),
+    });
+    check('API clears the key', ((await keyClear.json()) as { llmKey?: { configured?: boolean } }).llmKey?.configured === false);
+  }
 
   const rset = await fetch(`${base}/api/settings`, {
     method: 'POST',

@@ -271,12 +271,13 @@ apiRouter.get('/settings', (_req, res) => {
 });
 
 apiRouter.post('/settings', (req, res) => {
-  const body = (req.body ?? {}) as { dataDir?: unknown; buildsDir?: unknown; setupComplete?: unknown };
+  const body = (req.body ?? {}) as { dataDir?: unknown; buildsDir?: unknown; deepseekApiKey?: unknown; setupComplete?: unknown };
   const hasData = 'dataDir' in body;
   const hasBuilds = 'buildsDir' in body;
+  const hasKey = 'deepseekApiKey' in body;
   const hasSetup = 'setupComplete' in body;
-  if (!hasData && !hasBuilds && !hasSetup) {
-    res.status(400).json({ error: 'provide dataDir and/or buildsDir (a path string, or null to reset), and/or setupComplete' });
+  if (!hasData && !hasBuilds && !hasKey && !hasSetup) {
+    res.status(400).json({ error: 'provide dataDir, buildsDir, deepseekApiKey and/or setupComplete' });
     return;
   }
   for (const [key, value] of Object.entries({ dataDir: body.dataDir, buildsDir: body.buildsDir })) {
@@ -285,10 +286,15 @@ apiRouter.post('/settings', (req, res) => {
       return;
     }
   }
+  if (body.deepseekApiKey !== undefined && body.deepseekApiKey !== null && typeof body.deepseekApiKey !== 'string') {
+    res.status(400).json({ error: 'deepseekApiKey must be a string or null' });
+    return;
+  }
   try {
     const state = applySettings({
       ...(hasData ? { dataDir: (body.dataDir as string | null) ?? null } : {}),
       ...(hasBuilds ? { buildsDir: (body.buildsDir as string | null) ?? null } : {}),
+      ...(hasKey ? { deepseekApiKey: (body.deepseekApiKey as string | null) ?? null } : {}),
       ...(hasSetup ? { setupComplete: body.setupComplete === true } : {}),
     });
     res.json({ ok: true, ...state });

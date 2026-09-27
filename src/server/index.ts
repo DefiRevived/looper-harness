@@ -79,7 +79,7 @@ async function main(): Promise<void> {
       `  token   : ${config.defaultTokenId > 0 ? `#${config.defaultTokenId}` : 'not set — enter a token id in the console or set LOOPER_TOKEN_ID'}`,
     );
     console.log(
-      `  brain   : ${llmMode() === 'live' ? `live (${config.deepseek.model})` : 'MOCK — set DEEPSEEK_API_KEY in .env for live reasoning'}`,
+      `  brain   : ${llmMode() === 'live' ? `live (${config.deepseek.model})` : 'MOCK — add a DeepSeek API key in setup (⚙) or .env for live reasoning'}`,
     );
     console.log(`  data    : ${dataRoot()}`);
     console.log(`  builds  : ${buildsRoot()}`);

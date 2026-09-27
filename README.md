@@ -30,7 +30,7 @@ npm run dev         # → http://127.0.0.1:4520
 
 ```text
 LOOPER_TOKEN_ID=452             # REQUIRED — the token this runtime embodies (1–7777)
-DEEPSEEK_API_KEY=               # empty → mock brain (the UI says so)
+DEEPSEEK_API_KEY=               # optional here — or enter one in setup; stored locally
 DEEPSEEK_MODEL=deepseek-flash   # valid names: deepseek-flash, deepseek-v4-pro
 BASE_RPC_URL=https://mainnet.base.org
 LOOPER_DATA_DIR=                # optional — agent state dir (default <app>/data)
@@ -73,6 +73,10 @@ computer — there is no hosted copy of your agent's data:
 
 - **Agent data directory** — memory database, sessions, verbatim transcripts, caches.
 - **Builds directory** — builds and npm projects.
+- **DeepSeek API key** — the agent's brain. Enter it in the wizard (or later via ⚙): it is stored only in
+  `looper.config.json` on this machine and sent to DeepSeek's API alone. Without a key the harness replies
+  from a labeled mock brain — canned text that does NOT reflect the token's persona; with a key, every reply
+  is generated in the activated Looper's persona (codex traits, voice, values).
 
 Both default to folders inside the app directory and can point anywhere on disk (e.g. a folder you keep in
 your editor or back up). The server validates each path, creates it, and write-probes it. Both are editable

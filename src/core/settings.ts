@@ -22,6 +22,7 @@ import { config } from './config.js';
 export interface AppConfig {
   dataDir: string | null;
   buildsDir: string | null;
+  deepseekApiKey: string | null;
   setupComplete: boolean;
 }
 
@@ -41,16 +42,18 @@ function stampOf(file: string): string {
 export function loadConfig(): AppConfig {
   const stamp = stampOf(CONFIG_FILE);
   if (cache && cache.stamp === stamp) return cache.value;
-  let value: AppConfig = { dataDir: null, buildsDir: null, setupComplete: false };
+  let value: AppConfig = { dataDir: null, buildsDir: null, deepseekApiKey: null, setupComplete: false };
   try {
     const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) as {
       dataDir?: unknown;
       buildsDir?: unknown;
+      deepseekApiKey?: unknown;
       setupComplete?: unknown;
     };
     value = {
       dataDir: typeof parsed.dataDir === 'string' && parsed.dataDir.trim() ? path.normalize(parsed.dataDir.trim()) : null,
       buildsDir: typeof parsed.buildsDir === 'string' && parsed.buildsDir.trim() ? path.normalize(parsed.buildsDir.trim()) : null,
+      deepseekApiKey: typeof parsed.deepseekApiKey === 'string' && parsed.deepseekApiKey.trim() ? parsed.deepseekApiKey.trim() : null,
       setupComplete: parsed.setupComplete === true,
     };
   } catch {
@@ -61,7 +64,7 @@ export function loadConfig(): AppConfig {
 }
 
 function writeConfig(value: AppConfig): void {
-  fs.writeFileSync(CONFIG_FILE, `${JSON.stringify(value, null, 2)}\n`);
+  fs.writeFileSync(CONFIG_FILE, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   cache = { stamp: stampOf(CONFIG_FILE), value };
 }
 
@@ -148,6 +151,35 @@ export function buildsDirInfo(): DirInfo {
   };
 }
 
+// --- the brain: DeepSeek API key (stored locally, never anywhere else) -------
+
+export interface LlmKeyInfo {
+  configured: boolean;
+  masked: string | null;
+  source: 'env' | 'settings' | null;
+}
+
+export function llmKeyEnv(): string | null {
+  return process.env.DEEPSEEK_API_KEY?.trim() || null;
+}
+
+/** Effective DeepSeek key: DEEPSEEK_API_KEY env > looper.config.json > '' (mock). */
+export function llmApiKey(): string {
+  return llmKeyEnv() ?? loadConfig().deepseekApiKey ?? '';
+}
+
+/** Key state for the UI — the key itself is never returned. */
+export function llmKeyInfo(): LlmKeyInfo {
+  const env = llmKeyEnv();
+  const file = loadConfig().deepseekApiKey;
+  const key = env ?? file;
+  return {
+    configured: !!key,
+    masked: key ? `${key.slice(0, 3)}…${key.slice(-4)}` : null,
+    source: env ? 'env' : file ? 'settings' : null,
+  };
+}
+
 // --- setup + persistence ------------------------------------------------------
 
 export function setupComplete(): boolean {
@@ -157,11 +189,12 @@ export function setupComplete(): boolean {
 export interface SetupState {
   dataDir: DirInfo;
   buildsDir: DirInfo;
+  llmKey: LlmKeyInfo;
   setupComplete: boolean;
 }
 
 export function setupState(): SetupState {
-  return { dataDir: dataDirInfo(), buildsDir: buildsDirInfo(), setupComplete: setupComplete() };
+  return { dataDir: dataDirInfo(), buildsDir: buildsDirInfo(), llmKey: llmKeyInfo(), setupComplete: setupComplete() };
 }
 
 /** Validate + create + persist a directory choice. null/'' → back to default. */
@@ -186,11 +219,23 @@ function validateDir(raw: string, label: string): string {
  * Pass null to reset a directory to its default; setupComplete:true marks the
  * first-run wizard finished.
  */
-export function applySettings(patch: { dataDir?: string | null; buildsDir?: string | null; setupComplete?: boolean }): SetupState {
+export function applySettings(patch: {
+  dataDir?: string | null;
+  buildsDir?: string | null;
+  deepseekApiKey?: string | null;
+  setupComplete?: boolean;
+}): SetupState {
   const current = loadConfig();
   const next: AppConfig = { ...current };
   if ('dataDir' in patch) next.dataDir = patch.dataDir ? validateDir(patch.dataDir, 'agent data') : null;
   if ('buildsDir' in patch) next.buildsDir = patch.buildsDir ? validateDir(patch.buildsDir, 'builds') : null;
+  if ('deepseekApiKey' in patch) {
+    const key = String(patch.deepseekApiKey ?? '').trim();
+    if (key && key.length < 16) {
+      throw new Error("that doesn't look like a DeepSeek API key (they're long strings, usually starting with sk-)");
+    }
+    next.deepseekApiKey = key || null;
+  }
   if ('setupComplete' in patch) next.setupComplete = patch.setupComplete === true;
   writeConfig(next);
   return setupState();

@@ -67,7 +67,7 @@ async function handleCommand(tokenId: number, sessionKey: string, text: string):
         `${codex.name ?? `Looper #${tokenId}`} — ${codex.agent_class ?? 'Unclassified'}${codex.specialization ? ` (${codex.specialization})` : ''}`,
         `voice: ${p.voice ?? '—'}`,
         `risk: ${p.risk_profile ?? '—'} · autonomy: ${p.autonomy_profile ?? '—'} · codex source: ${bundle.codexSource}`,
-        `brain: ${llmMode() === 'live' ? `live (${config.deepseek.model})` : 'mock — set DEEPSEEK_API_KEY in .env'}`,
+        `brain: ${llmMode() === 'live' ? `live (${config.deepseek.model})` : 'mock — add a DeepSeek API key in setup (⚙)'}`,
         `helixa cred: ${cred ? `${cred.score}/${cred.scoreScale} · ${cred.tier}` : 'not published for this agent yet'}`,
         `erc-8004 agent: ${bindings.agentId ?? 'unbound'}`,
       ].join('\n');
