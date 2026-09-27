@@ -13,7 +13,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { verifyMessage, type Hex } from 'viem';
-import { config } from './config.js';
+import { dataRoot } from './settings.js';
 import { readOwner } from './chain.js';
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -21,7 +21,7 @@ const PROOF_TTL_MS = 24 * 60 * 60_000;
 const MAX_CHALLENGES = 200;
 
 function loadSecret(): Buffer {
-  const file = path.join(config.dataDir, 'ownership-secret');
+  const file = path.join(dataRoot(), 'ownership-secret');
   try {
     const hex = fs.readFileSync(file, 'utf8').trim();
     if (/^[0-9a-f]{64}$/i.test(hex)) return Buffer.from(hex, 'hex');
@@ -30,7 +30,7 @@ function loadSecret(): Buffer {
   }
   const secret = randomBytes(32);
   try {
-    fs.mkdirSync(config.dataDir, { recursive: true });
+    fs.mkdirSync(dataRoot(), { recursive: true });
     fs.writeFileSync(file, secret.toString('hex'), { mode: 0o600 });
   } catch {
     // best-effort: an in-memory secret just means proofs reset on restart
@@ -38,7 +38,13 @@ function loadSecret(): Buffer {
   return secret;
 }
 
-const SECRET = loadSecret();
+// Lazy: the data directory may be chosen in the first-run wizard before first use.
+let cachedSecret: Buffer | null = null;
+
+function secret(): Buffer {
+  if (!cachedSecret) cachedSecret = loadSecret();
+  return cachedSecret;
+}
 
 interface Challenge {
   tokenId: number;
@@ -127,7 +133,7 @@ export async function verifyOwnership(
 function issueProof(tokenId: number, address: string, now = Date.now()): string {
   const exp = now + PROOF_TTL_MS;
   const body = `${address.toLowerCase()}:${exp}`;
-  const mac = createHmac('sha256', SECRET).update(`${tokenId}:${body}`).digest('hex');
+  const mac = createHmac('sha256', secret()).update(`${tokenId}:${body}`).digest('hex');
   return `${body}.${mac}`;
 }
 
@@ -143,7 +149,7 @@ export function validateProof(proof: string, tokenId: number): { address: string
   const address = body.slice(0, colon);
   const exp = Number(body.slice(colon + 1));
   if (!/^0x[0-9a-fA-F]{40}$/.test(address) || !Number.isFinite(exp) || exp < Date.now()) return null;
-  const expect = createHmac('sha256', SECRET).update(`${tokenId}:${body}`).digest('hex');
+  const expect = createHmac('sha256', secret()).update(`${tokenId}:${body}`).digest('hex');
   const got = Buffer.from(mac, 'hex');
   const wanted = Buffer.from(expect, 'hex');
   if (got.length !== wanted.length || !timingSafeEqual(got, wanted)) return null;

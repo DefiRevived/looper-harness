@@ -7,6 +7,29 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
+    <div class="setup hidden" id="setup">
+      <div class="setup-card">
+        <div class="activation-brand"><span class="brand-mark">◉</span> FIRST-RUN SETUP</div>
+        <h1>Your agent, your machine</h1>
+        <p class="setup-intro">
+          Everything this agent produces — memory, chat history, transcripts, caches, builds — is stored on
+          <b>this computer</b>, in the directories you choose below. Nothing is uploaded to us: there is no
+          hosted copy of your agent's data.
+        </p>
+        <label class="settings-label" for="setup-data-dir">agent data directory <span class="setup-sub">memory · sessions · transcripts · caches</span></label>
+        <input id="setup-data-dir" type="text" placeholder="…" autocomplete="off" spellcheck="false" />
+        <p class="settings-hint" id="setup-data-effective">—</p>
+        <label class="settings-label" for="setup-builds-dir">builds &amp; projects directory</label>
+        <input id="setup-builds-dir" type="text" placeholder="…" autocomplete="off" spellcheck="false" />
+        <p class="settings-hint" id="setup-builds-effective">—</p>
+        <p class="settings-error" id="setup-status"></p>
+        <div class="settings-actions">
+          <button class="btn" type="button" id="setup-defaults">use the defaults</button>
+          <button class="btn btn-accent" type="button" id="setup-save">save &amp; continue</button>
+        </div>
+        <p class="activation-note">both can be changed later via ⚙ settings.</p>
+      </div>
+    </div>
     <div class="activation hidden" id="activation">
       <div class="activation-card">
         <div class="activation-brand"><span class="brand-mark">◉</span> LOOPER AGENT</div>
@@ -183,9 +206,16 @@
           <button class="btn btn-ghost" type="button" id="settings-close">✕</button>
         </div>
         <div class="settings-body">
+          <label class="settings-label" for="settings-data-dir">agent data directory</label>
+          <input id="settings-data-dir" type="text" placeholder="loading…" autocomplete="off" spellcheck="false" />
+          <p class="settings-hint" id="settings-data-effective">—</p>
+          <p class="settings-hint">
+            Memory, sessions, transcripts and caches live here — everything stays on this machine. Empty =
+            default; switching starts fresh at the new location, existing files stay where they are.
+          </p>
           <label class="settings-label" for="settings-builds-dir">builds &amp; projects directory</label>
           <input id="settings-builds-dir" type="text" placeholder="loading…" autocomplete="off" spellcheck="false" />
-          <p class="settings-hint" id="settings-effective">—</p>
+          <p class="settings-hint" id="settings-builds-effective">—</p>
           <p class="settings-hint">
             Where new builds and npm projects are created. Existing builds stay in the directory they were
             created in. <code>LOOPER_BUILDS_DIR</code> in <code>.env</code> overrides this setting.

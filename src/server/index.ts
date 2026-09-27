@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
 import { config } from '../core/config.js';
+import { buildsRoot, dataRoot, setupComplete } from '../core/settings.js';
 import { startDreamScheduler } from '../core/dreams.js';
 import { llmMode } from '../core/llm.js';
 import { apiRouter } from './api.js';
@@ -80,6 +81,9 @@ async function main(): Promise<void> {
     console.log(
       `  brain   : ${llmMode() === 'live' ? `live (${config.deepseek.model})` : 'MOCK — set DEEPSEEK_API_KEY in .env for live reasoning'}`,
     );
+    console.log(`  data    : ${dataRoot()}`);
+    console.log(`  builds  : ${buildsRoot()}`);
+    if (!setupComplete()) console.log('  setup   : first run — open the console to choose where your data lives');
     console.log('');
   });
 

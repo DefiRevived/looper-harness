@@ -110,11 +110,21 @@ const settingsOpen = $<HTMLButtonElement>('settings-open');
 const activationSettings = $<HTMLButtonElement>('activation-settings');
 const settingsModal = $<HTMLDivElement>('settings-modal');
 const settingsClose = $<HTMLButtonElement>('settings-close');
+const settingsDataDir = $<HTMLInputElement>('settings-data-dir');
+const settingsDataEffective = $<HTMLParagraphElement>('settings-data-effective');
 const settingsBuildsDir = $<HTMLInputElement>('settings-builds-dir');
-const settingsEffective = $<HTMLParagraphElement>('settings-effective');
+const settingsBuildsEffective = $<HTMLParagraphElement>('settings-builds-effective');
 const settingsStatus = $<HTMLParagraphElement>('settings-status');
 const settingsSave = $<HTMLButtonElement>('settings-save');
 const settingsReset = $<HTMLButtonElement>('settings-reset');
+const setupEl = $<HTMLDivElement>('setup');
+const setupDataDir = $<HTMLInputElement>('setup-data-dir');
+const setupDataEffective = $<HTMLParagraphElement>('setup-data-effective');
+const setupBuildsDir = $<HTMLInputElement>('setup-builds-dir');
+const setupBuildsEffective = $<HTMLParagraphElement>('setup-builds-effective');
+const setupStatus = $<HTMLParagraphElement>('setup-status');
+const setupDefaults = $<HTMLButtonElement>('setup-defaults');
+const setupSave = $<HTMLButtonElement>('setup-save');
 const toastEl = $<HTMLDivElement>('toast');
 const buildCards = new Map<string, HTMLElement>();
 let unseenBuilds = 0;
@@ -779,9 +789,9 @@ async function openVersionModal(buildId: string, index: number, date: string): P
   }
 }
 
-/* ---------- settings ---------- */
+/* ---------- settings + first-run setup ---------- */
 
-interface BuildsDirInfo {
+interface DirInfo {
   effective: string;
   configured: string | null;
   envOverride: string | null;
@@ -789,28 +799,40 @@ interface BuildsDirInfo {
   source: 'env' | 'settings' | 'default';
 }
 
-function renderSettings(d: BuildsDirInfo): void {
-  settingsBuildsDir.value = d.configured ?? '';
-  settingsBuildsDir.placeholder = d.defaultPath;
-  const sourceNote =
+interface SetupState {
+  dataDir: DirInfo;
+  buildsDir: DirInfo;
+  setupComplete: boolean;
+}
+
+function renderDir(input: HTMLInputElement, effectiveEl: HTMLElement, d: DirInfo, envVar: string): void {
+  input.value = d.configured ?? '';
+  input.placeholder = d.defaultPath;
+  const note =
     d.source === 'env'
-      ? 'set by LOOPER_BUILDS_DIR (.env) — it overrides this setting'
+      ? `set by ${envVar} (.env) — it overrides this setting`
       : d.source === 'settings'
         ? 'from this setting'
-        : 'default (inside the app data folder)';
-  settingsEffective.textContent = `effective now: ${d.effective} — ${sourceNote}`;
+        : 'default';
+  effectiveEl.textContent = `effective now: ${d.effective} — ${note}`;
+}
+
+function renderSetup(state: SetupState): void {
+  renderDir(settingsDataDir, settingsDataEffective, state.dataDir, 'LOOPER_DATA_DIR');
+  renderDir(settingsBuildsDir, settingsBuildsEffective, state.buildsDir, 'LOOPER_BUILDS_DIR');
+  renderDir(setupDataDir, setupDataEffective, state.dataDir, 'LOOPER_DATA_DIR');
+  renderDir(setupBuildsDir, setupBuildsEffective, state.buildsDir, 'LOOPER_BUILDS_DIR');
 }
 
 async function openSettings(): Promise<void> {
   settingsModal.classList.remove('hidden');
   settingsStatus.textContent = '';
-  settingsEffective.textContent = 'loading…';
-  settingsBuildsDir.value = '';
+  settingsDataEffective.textContent = 'loading…';
+  settingsBuildsEffective.textContent = 'loading…';
   try {
-    const data = await getJson<{ buildsDir: BuildsDirInfo }>('/api/settings');
-    renderSettings(data.buildsDir);
+    renderSetup(await getJson<SetupState>('/api/settings'));
   } catch (err) {
-    settingsEffective.textContent = `couldn't load settings — ${(err as Error).message}`;
+    settingsStatus.textContent = `couldn't load settings — ${(err as Error).message}`;
   }
 }
 
@@ -820,16 +842,14 @@ function closeSettings(): void {
 
 async function saveSettings(): Promise<void> {
   settingsStatus.textContent = '';
-  const value = settingsBuildsDir.value.trim();
-  if (!value) {
-    settingsStatus.textContent = 'enter a directory path — or use “reset to default”.';
-    return;
-  }
   settingsSave.disabled = true;
   try {
-    const res = await postJson<{ ok: boolean; buildsDir: BuildsDirInfo }>('/api/settings', { buildsDir: value });
-    renderSettings(res.buildsDir);
-    toast(`builds now save to ${res.buildsDir.effective}`);
+    const state = await postJson<SetupState & { ok: boolean }>('/api/settings', {
+      dataDir: settingsDataDir.value.trim() || null,
+      buildsDir: settingsBuildsDir.value.trim() || null,
+    });
+    renderSetup(state);
+    toast(`storage updated — data: ${state.dataDir.effective}`);
   } catch (err) {
     settingsStatus.textContent = (err as Error).message;
   } finally {
@@ -841,13 +861,40 @@ async function resetSettings(): Promise<void> {
   settingsStatus.textContent = '';
   settingsReset.disabled = true;
   try {
-    const res = await postJson<{ ok: boolean; buildsDir: BuildsDirInfo }>('/api/settings', { buildsDir: null });
-    renderSettings(res.buildsDir);
-    toast('builds directory back to default');
+    const state = await postJson<SetupState & { ok: boolean }>('/api/settings', { dataDir: null, buildsDir: null });
+    renderSetup(state);
+    toast('storage directories back to default');
   } catch (err) {
     settingsStatus.textContent = (err as Error).message;
   } finally {
     settingsReset.disabled = false;
+  }
+}
+
+async function saveSetup(useDefaults: boolean): Promise<void> {
+  setupStatus.textContent = '';
+  setupSave.disabled = true;
+  setupDefaults.disabled = true;
+  try {
+    const state = await postJson<SetupState & { ok: boolean }>(
+      '/api/settings',
+      useDefaults
+        ? { dataDir: null, buildsDir: null, setupComplete: true }
+        : {
+            dataDir: setupDataDir.value.trim() || null,
+            buildsDir: setupBuildsDir.value.trim() || null,
+            setupComplete: true,
+          },
+    );
+    renderSetup(state);
+    setupEl.classList.add('hidden');
+    toast('setup complete — your data stays on this machine');
+    startConsole();
+  } catch (err) {
+    setupStatus.textContent = (err as Error).message;
+  } finally {
+    setupSave.disabled = false;
+    setupDefaults.disabled = false;
   }
 }
 
@@ -1603,6 +1650,8 @@ settingsModal.addEventListener('click', (event) => {
 });
 settingsSave.addEventListener('click', () => void saveSettings());
 settingsReset.addEventListener('click', () => void resetSettings());
+setupSave.addEventListener('click', () => void saveSetup(false));
+setupDefaults.addEventListener('click', () => void saveSetup(true));
 
 tokenForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -1904,7 +1953,25 @@ window.addEventListener('message', (event) => {
   void handleBridgeRequest(frame, d.id, String(d.method ?? ''), Array.isArray(d.params) ? d.params : []);
 });
 
-if (tokenId) void activate(tokenId);
-else showActivation();
+function startConsole(): void {
+  if (tokenId) void activate(tokenId);
+  else showActivation();
+}
+
+async function boot(): Promise<void> {
+  try {
+    const state = await getJson<SetupState>('/api/settings');
+    if (!state.setupComplete) {
+      renderSetup(state);
+      setupEl.classList.remove('hidden');
+      return; // the console starts once the wizard saves
+    }
+  } catch {
+    // settings unreachable — fall through to the normal console
+  }
+  startConsole();
+}
+
+void boot();
 
 export {};

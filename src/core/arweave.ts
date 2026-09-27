@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { config } from './config.js';
+import { dataPath } from './settings.js';
 
 /**
  * Arweave gateway rotation.
@@ -13,7 +13,7 @@ import { config } from './config.js';
  */
 const GATEWAYS = ['https://arweave.net', 'https://ar-io.dev', 'https://g8way.io', 'https://permagate.io'];
 
-const cacheDir = path.join(config.dataDir, 'cache');
+const cacheDir = (): string => dataPath('cache');
 const negativeCache = new Map<string, number>();
 
 const cacheKey = (uri: string) => crypto.createHash('sha1').update(uri).digest('hex');
@@ -43,8 +43,9 @@ export async function fetchArweave(uri: string): Promise<ArweaveResponse> {
   }
 
   const key = cacheKey(uri);
-  const metaPath = path.join(cacheDir, `${key}.meta.json`);
-  const binPath = path.join(cacheDir, `${key}.bin`);
+  const dir = cacheDir();
+  const metaPath = path.join(dir, `${key}.meta.json`);
+  const binPath = path.join(dir, `${key}.bin`);
 
   try {
     const [metaRaw, bytes] = await Promise.all([fs.readFile(metaPath, 'utf8'), fs.readFile(binPath)]);
@@ -70,7 +71,7 @@ export async function fetchArweave(uri: string): Promise<ArweaveResponse> {
         continue;
       }
       const contentType = res.headers.get('content-type') ?? sniffContentType(bytes);
-      await fs.mkdir(cacheDir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(binPath, bytes);
       await fs.writeFile(metaPath, JSON.stringify({ uri, url, contentType, bytes: bytes.length, fetchedAt: new Date().toISOString() }, null, 2));
       return { bytes, contentType };

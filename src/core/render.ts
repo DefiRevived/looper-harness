@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium, type Browser } from 'playwright-core';
 import { config } from './config.js';
+import { dataPath } from './settings.js';
 
 /**
  * Headless build rendering — the missing "eyes" for the agent.
@@ -199,7 +200,7 @@ export async function renderBuild(parentKey: string, buildId: string): Promise<R
 
   try {
     const shot = await page.screenshot({ type: 'png' });
-    const rendersDir = path.join(config.dataDir, 'renders');
+    const rendersDir = dataPath('renders');
     fs.mkdirSync(rendersDir, { recursive: true });
     const file = `${buildId.replace(/\.(html|svg)$/, '')}-${Date.now()}.png`;
     report.screenshot = path.join(rendersDir, file);

@@ -17,7 +17,7 @@ import { allLocks, forgetEntry, listMemoryEntries, lockRemove, taskComplete, tas
 import { listActivity } from '../core/activity.js';
 import { runDream } from '../core/dreams.js';
 import { createChallenge, validateProof, verifyOwnership } from '../core/ownership.js';
-import { buildsDirInfo, buildsRoot, setBuildsDir } from '../core/settings.js';
+import { applySettings, buildsRoot, setupState } from '../core/settings.js';
 import { inspectTransaction, parseChain, READ_RPC_METHODS, rpcRead } from '../core/web3.js';
 import { listTranscripts, readTranscript } from '../core/transcripts.js';
 import * as store from '../core/store.js';
@@ -264,25 +264,34 @@ apiRouter.post('/ownership/verify', async (req, res) => {
   res.json({ ok: true, tokenId: result.tokenId, address: result.address, proof: result.proof });
 });
 
-// --- operator settings (builds directory etc.) -------------------------------
+// --- operator settings (storage directories + first-run setup) ---------------
 
 apiRouter.get('/settings', (_req, res) => {
-  res.json({ buildsDir: buildsDirInfo(), dataDir: config.dataDir });
+  res.json(setupState());
 });
 
 apiRouter.post('/settings', (req, res) => {
-  const body = (req.body ?? {}) as { buildsDir?: unknown };
-  if (!('buildsDir' in body)) {
-    res.status(400).json({ error: 'buildsDir is required (pass a path, or null to reset to the default)' });
+  const body = (req.body ?? {}) as { dataDir?: unknown; buildsDir?: unknown; setupComplete?: unknown };
+  const hasData = 'dataDir' in body;
+  const hasBuilds = 'buildsDir' in body;
+  const hasSetup = 'setupComplete' in body;
+  if (!hasData && !hasBuilds && !hasSetup) {
+    res.status(400).json({ error: 'provide dataDir and/or buildsDir (a path string, or null to reset), and/or setupComplete' });
     return;
   }
-  if (body.buildsDir !== null && typeof body.buildsDir !== 'string') {
-    res.status(400).json({ error: 'buildsDir must be a path string or null' });
-    return;
+  for (const [key, value] of Object.entries({ dataDir: body.dataDir, buildsDir: body.buildsDir })) {
+    if (value !== undefined && value !== null && typeof value !== 'string') {
+      res.status(400).json({ error: `${key} must be a path string or null` });
+      return;
+    }
   }
   try {
-    const info = setBuildsDir((body.buildsDir as string | null) ?? null);
-    res.json({ ok: true, buildsDir: info });
+    const state = applySettings({
+      ...(hasData ? { dataDir: (body.dataDir as string | null) ?? null } : {}),
+      ...(hasBuilds ? { buildsDir: (body.buildsDir as string | null) ?? null } : {}),
+      ...(hasSetup ? { setupComplete: body.setupComplete === true } : {}),
+    });
+    res.json({ ok: true, ...state });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }

@@ -37,5 +37,6 @@ export const config = {
   },
   telegramAllowedChatIds: env('TELEGRAM_ALLOWED_CHAT_IDS').split(',').map((s) => s.trim()).filter(Boolean),
   discordAllowedUserIds: env('DISCORD_ALLOWED_USER_IDS').split(',').map((s) => s.trim()).filter(Boolean),
+  // Default agent-state location; first-run setup can relocate it (env wins).
   dataDir: path.resolve(env('LOOPER_DATA_DIR', 'data')),
 };

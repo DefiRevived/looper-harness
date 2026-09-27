@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createPublicClient, decodeFunctionData, fallback, formatEther, http, parseEther, toFunctionSelector, type Chain, type PublicClient } from 'viem';
 import { base, baseSepolia } from 'viem/chains';
 import { config } from './config.js';
+import { dataPath } from './settings.js';
 import { blockscoutAbi } from './research.js';
 
 /**
@@ -77,7 +78,7 @@ export async function getLatestBlock(c: Web3Chain): Promise<bigint> {
 
 // --- ABI resolution (Sourcify) -------------------------------------------------
 
-const abiDir = path.join(config.dataDir, 'cache', 'abi');
+const abiDir = (): string => dataPath('cache', 'abi');
 const ABI_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type AbiLookup =
@@ -86,7 +87,7 @@ export type AbiLookup =
 
 export async function lookupAbi(chain: Web3Chain, address: string): Promise<AbiLookup> {
   const addr = address.toLowerCase();
-  const file = path.join(abiDir, `${CHAINS[chain].id}-${addr}.json`);
+  const file = path.join(abiDir(), `${CHAINS[chain].id}-${addr}.json`);
   try {
     const stat = fs.statSync(file);
     if (Date.now() - stat.mtimeMs < ABI_TTL_MS) {
@@ -115,7 +116,7 @@ export async function lookupAbi(chain: Web3Chain, address: string): Promise<AbiL
         const viaBlockscout = await blockscoutAbi(chain, addr);
         if (viaBlockscout) {
           const verified = `blockscout · ${viaBlockscout.name}`;
-          fs.mkdirSync(abiDir, { recursive: true });
+          fs.mkdirSync(abiDir(), { recursive: true });
           fs.writeFileSync(file, JSON.stringify({ fetchedAt: new Date().toISOString(), verified, abi: viaBlockscout.abi }));
           return { ok: true, abi: viaBlockscout.abi, verified, from: 'blockscout' };
         }
@@ -135,7 +136,7 @@ export async function lookupAbi(chain: Web3Chain, address: string): Promise<AbiL
   if (!result) return { ok: false, reason: 'Sourcify returned no ABI for this address' };
 
   const verified = `${result.match}${current !== addr ? ` · proxy → ${current}` : ''}`;
-  fs.mkdirSync(abiDir, { recursive: true });
+  fs.mkdirSync(abiDir(), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ fetchedAt: new Date().toISOString(), verified, abi: result.abi }));
   return { ok: true, abi: result.abi, verified, from: 'sourcify' };
 }

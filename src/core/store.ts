@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { dataRoot } from './settings.js';
 import { archiveTranscript } from './transcripts.js';
 
 export interface StoredMessage {
@@ -15,12 +15,13 @@ interface DbShape {
 
 export const MAX_SESSION_MESSAGES = 60;
 
-const statePath = path.join(config.dataDir, 'looper-state.json');
-let db: DbShape = load();
+const statePath = (): string => path.join(dataRoot(), 'looper-state.json');
+let db: DbShape | null = null;
+let loadedPath = '';
 
-function load(): DbShape {
+function load(file: string): DbShape {
   try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8')) as { sessions?: Record<string, StoredMessage[]> };
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { sessions?: Record<string, StoredMessage[]> };
     // Legacy keys (missions/credEvents) from the removed practice economy are dropped on next write.
     return { sessions: parsed.sessions ?? {} };
   } catch {
@@ -28,22 +29,34 @@ function load(): DbShape {
   }
 }
 
+/** Loads (or re-loads after a data-directory switch) the state file on demand. */
+function ensure(): DbShape {
+  const file = statePath();
+  if (!db || loadedPath !== file) {
+    db = load(file);
+    loadedPath = file;
+  }
+  return db;
+}
+
 function persist(): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  const tmp = `${statePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, statePath);
+  const file = statePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(ensure(), null, 2));
+  fs.renameSync(tmp, file);
 }
 
 // The local practice economy (missions/cred/receipts) was removed — the real
 // Cred system is Helixa's, read in src/core/cred.ts.
 
 export function getSession(sessionKey: string): StoredMessage[] {
-  return db.sessions[sessionKey] ?? [];
+  return ensure().sessions[sessionKey] ?? [];
 }
 
 export function appendMessage(sessionKey: string, message: StoredMessage): void {
-  const list = db.sessions[sessionKey] ?? (db.sessions[sessionKey] = []);
+  const data = ensure();
+  const list = data.sessions[sessionKey] ?? (data.sessions[sessionKey] = []);
   list.push(message);
   if (list.length > MAX_SESSION_MESSAGES) {
     // The cap drops the OLDEST messages — verbatim-archive them before they leave.
@@ -54,9 +67,10 @@ export function appendMessage(sessionKey: string, message: StoredMessage): void 
 }
 
 export function resetSession(sessionKey: string): void {
-  const existing = db.sessions[sessionKey];
+  const data = ensure();
+  const existing = data.sessions[sessionKey];
   // A wipe must never be the last time the words existed — archive first.
   if (existing?.length) archiveTranscript(sessionKey, existing, 'reset');
-  delete db.sessions[sessionKey];
+  delete data.sessions[sessionKey];
   persist();
 }

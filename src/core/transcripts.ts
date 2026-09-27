@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { dataPath } from './settings.js';
 
 /**
  * Verbatim transcript archive — the last line of defense for conversation text.
@@ -22,7 +22,7 @@ import { config } from './config.js';
  * turn or a reset. Search with scripts/search-transcripts.ts.
  */
 
-const root = path.join(config.dataDir, 'transcripts');
+const root = (): string => dataPath('transcripts');
 
 interface ArchivedMessage {
   role: 'user' | 'assistant';
@@ -35,13 +35,13 @@ function slug(sessionKey: string): string {
 }
 
 export function transcriptPath(sessionKey: string): string {
-  return path.join(root, `${slug(sessionKey)}.jsonl`);
+  return path.join(root(), `${slug(sessionKey)}.jsonl`);
 }
 
 export function archiveTranscript(sessionKey: string, messages: ArchivedMessage[], reason: 'reset' | 'trim'): void {
   if (!messages.length) return;
   try {
-    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(root(), { recursive: true });
     const archivedAt = new Date().toISOString();
     const lines: string[] = [];
     if (reason === 'reset') {
@@ -82,10 +82,10 @@ export interface TranscriptLine {
 /** Every archived session, newest activity first. */
 export function listTranscripts(): TranscriptSessionInfo[] {
   try {
-    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(root(), { recursive: true });
     const infos: TranscriptSessionInfo[] = [];
-    for (const name of fs.readdirSync(root).filter((f) => f.endsWith('.jsonl'))) {
-      const full = path.join(root, name);
+    for (const name of fs.readdirSync(root()).filter((f) => f.endsWith('.jsonl'))) {
+      const full = path.join(root(), name);
       const stat = fs.statSync(full);
       const lines = fs.readFileSync(full, 'utf8').split('\n').filter(Boolean);
       let session = name.replace(/\.jsonl$/, '');

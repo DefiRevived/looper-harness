@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { MemoryStore, ReMEM } from '@darksol/remem';
 import { config } from './config.js';
+import { dataPath } from './settings.js';
 
 /**
  * Long-term agent memory, backed by Darksol's @darksol/remem package (its
@@ -22,14 +23,15 @@ import { config } from './config.js';
  *   lock  → { scope: 'lock', tokenId, buildId, lockType, snippet? }   operator locks (enforced in tools)
  */
 
-const memDbPath = path.join(config.dataDir, 'remem.db');
+const memDbPath = (): string => dataPath('remem.db');
 
 function dbStamp(): string {
+  const file = memDbPath();
   try {
-    const s = fs.statSync(memDbPath);
-    return `${s.mtimeMs}:${s.size}`;
+    const s = fs.statSync(file);
+    return `${file}:${s.mtimeMs}:${s.size}`;
   } catch {
-    return 'missing';
+    return `${file}:missing`;
   }
 }
 
@@ -38,7 +40,8 @@ let memInstance: { store: MemoryStore; stamp: string } | null = null;
 async function getMem(): Promise<MemoryStore> {
   const stamp = dbStamp();
   if (memInstance && memInstance.stamp === stamp) return memInstance.store;
-  const store = new MemoryStore(memDbPath);
+  fs.mkdirSync(path.dirname(memDbPath()), { recursive: true });
+  const store = new MemoryStore(memDbPath());
   await store.init();
   memInstance = { store, stamp };
   return store;
@@ -59,9 +62,10 @@ async function getSmart(): Promise<ReMEM> {
   const llm = config.deepseek.apiKey
     ? { type: 'openai' as const, apiKey: config.deepseek.apiKey, model: config.deepseek.model, baseUrl: config.deepseek.baseUrl }
     : undefined;
+  fs.mkdirSync(path.dirname(memDbPath()), { recursive: true });
   const smart = new ReMEM({
     storage: 'sqlite',
-    dbPath: memDbPath,
+    dbPath: memDbPath(),
     embeddings: { enabled: false, baseUrl: '', model: '', asyncEmbed: false },
     ...(llm ? { llm } : {}),
   });

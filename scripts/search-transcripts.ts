@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from '../src/core/config.js';
+import { dataPath } from '../src/core/settings.js';
 
 const args = process.argv.slice(2);
 const term = args.find((a) => !a.startsWith('--'));
@@ -18,7 +18,7 @@ if (!term) {
   const sessIdx = args.indexOf('--session');
   const sessionFilter = sessIdx >= 0 ? args[sessIdx + 1] : undefined;
 
-  const root = path.join(config.dataDir, 'transcripts');
+  const root = dataPath('transcripts');
   if (!fs.existsSync(root)) {
     console.log('no transcripts archived yet');
   } else {

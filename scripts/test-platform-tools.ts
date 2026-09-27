@@ -10,7 +10,7 @@ import { executeToolCall, toolSpecsForSurface, type ToolContext } from '../src/c
 import { listVersions } from '../src/core/versions.js';
 import { looperImageCount, resolveLooperImages } from '../src/core/looperAssets.js';
 import { memoryRecall, memoryRemember, purgeTokenMemory, taskAdd, taskComplete, taskList } from '../src/core/memory.js';
-import { buildsRoot } from '../src/core/settings.js';
+import { buildsRoot, dataPath } from '../src/core/settings.js';
 
 const TOKEN = 999999;
 const call = (ctx: ToolContext, name: string, args: Record<string, unknown>) =>
@@ -42,7 +42,7 @@ console.log((await call(vctx, 'lock_build', { action: 'freeze' })).modelText);
 console.log((await call(vctx, 'revert_build', { build_id: vid })).modelText);
 await call(vctx, 'lock_build', { action: 'unfreeze' });
 await call(vctx, 'delete_build', { build_id: vid });
-console.log('versions purged on delete:', !fs.existsSync(path.join('data', 'versions', 'web_999999', vid)));
+console.log('versions purged on delete:', !fs.existsSync(path.join(dataPath('versions', 'web_999999'), vid)));
 
 console.log('\n===== tasks =====');
 const t1 = await taskAdd(TOKEN, 'verify the #420 dossier build');

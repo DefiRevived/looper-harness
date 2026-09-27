@@ -625,6 +625,57 @@ input:focus {
   font-size: 11px;
 }
 
+/* ---------- first-run setup ---------- */
+
+.setup {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 13, 19, 0.96);
+  backdrop-filter: blur(6px);
+  padding: 20px;
+}
+
+.setup-card {
+  width: min(620px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 26px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.setup-card h1 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+
+.setup-intro {
+  color: var(--dim);
+  line-height: 1.55;
+  margin: 0 0 14px;
+}
+
+.setup-card .settings-label {
+  margin-top: 10px;
+}
+
+.setup-sub {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--dim);
+  font-weight: 400;
+}
+
 .layout-builds {
   flex: 1;
   padding: 14px 20px 20px;

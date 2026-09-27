@@ -33,6 +33,7 @@ LOOPER_TOKEN_ID=452             # REQUIRED — the token this runtime embodies (
 DEEPSEEK_API_KEY=               # empty → mock brain (the UI says so)
 DEEPSEEK_MODEL=deepseek-flash   # valid names: deepseek-flash, deepseek-v4-pro
 BASE_RPC_URL=https://mainnet.base.org
+LOOPER_DATA_DIR=                # optional — agent state dir (default <app>/data)
 LOOPER_BUILDS_DIR=              # optional — where builds/projects go (default <data>/artifacts)
 ```
 
@@ -65,16 +66,21 @@ sign the gas-free ownership message, and the runtime loads its identity, codex a
 - **Adapters** — Telegram/Discord bots sharing the brain (Telegram gets a small read-only tool lane) and an
   MCP server over stdio.
 
-## Settings
+## Setup & your data — it all stays on your machine
 
-The console has a settings panel (⚙ in the top bar):
+First run opens a **setup wizard** in the console, because the agent's entire memory of you lives on THIS
+computer — there is no hosted copy of your agent's data:
 
-- **Builds directory** — where builds and npm projects are created. The default lives inside the app data
-  folder; point it at any directory on your machine (e.g. a folder you keep in your editor). The server
-  validates, creates it, and writes a probe file to prove it's writable. Existing builds stay in the
-  directory they were created in.
-- Precedence: `LOOPER_BUILDS_DIR` (`.env`) → the saved setting → default. The panel shows which one is in
-  effect.
+- **Agent data directory** — memory database, sessions, verbatim transcripts, caches.
+- **Builds directory** — builds and npm projects.
+
+Both default to folders inside the app directory and can point anywhere on disk (e.g. a folder you keep in
+your editor or back up). The server validates each path, creates it, and write-probes it. Both are editable
+at any time via the ⚙ settings panel; `LOOPER_DATA_DIR` / `LOOPER_BUILDS_DIR` in `.env` override the stored
+choice. Switching directories starts fresh at the new location — existing files stay where they are.
+
+The only outbound traffic is the LLM API (DeepSeek, your key), Arweave gateways for Looper art/codex, and
+public Base RPCs for chain reads. Nothing else leaves the machine.
 
 ## Ownership verification
 

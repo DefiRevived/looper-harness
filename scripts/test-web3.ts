@@ -10,6 +10,7 @@ import path from 'node:path';
 import { executeToolCall } from '../src/core/tools.js';
 import { getLatestBlock } from '../src/core/web3.js';
 import { config } from '../src/core/config.js';
+import { dataPath } from '../src/core/settings.js';
 import type { ToolCall } from '../src/core/llm.js';
 
 const TOKEN = 452;
@@ -42,7 +43,7 @@ console.log('\n--- fetch_contract_abi: USDC on base ---');
 console.log(abiRes.modelText);
 console.log('');
 check('fetch_contract_abi resolves + lists reads', /balanceOf\(address\)/.test(abiRes.modelText) && /read/.test(abiRes.modelText));
-const cacheFile = path.join(config.dataDir, 'cache', 'abi', `8453-${USDC.toLowerCase()}.json`);
+const cacheFile = path.join(dataPath('cache', 'abi'), `8453-${USDC.toLowerCase()}.json`);
 check('ABI cached to disk', fs.existsSync(cacheFile));
 
 // --- 3. real reads

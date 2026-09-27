@@ -2,6 +2,7 @@ node_modules/
 dist/
 data/
 .env
+looper.config.json
 *.log
 .vite/
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { dataPath } from './settings.js';
 
 /**
  * Build version archive — the undo net for the artifact system. Every
@@ -13,14 +13,14 @@ import { config } from './config.js';
  * whole file tree). Legacy single-file versions (<ts>.html / <ts>.svg) from the
  * one-document era are still listed, previewed and restorable.
  */
-const versionsRoot = path.join(config.dataDir, 'versions');
+const versionsRoot = (): string => dataPath('versions');
 const MAX_VERSIONS = 10;
 
 /** Project-toolchain dirs — never snapshotted (node_modules is heavy; dist is derived from source). */
 const MANAGED_NAMES = new Set(['node_modules', '.git', 'dist']);
 
 function versionDir(sessionDir: string, buildId: string): string {
-  return path.join(versionsRoot, sessionDir, buildId);
+  return path.join(versionsRoot(), sessionDir, buildId);
 }
 
 /** Walk files under a root → relative paths (recursive, managed dirs skipped). */
