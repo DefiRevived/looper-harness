@@ -4,14 +4,15 @@
  *  2. validation (relative paths rejected)
  *  3. live round-trips through the real modules — a build into a custom builds
  *     dir, and session state + transcript into a custom data dir
- *  4. best-effort: the live server's /api/settings
- * Always restores defaults with the wizard left pending (setupComplete:false).
+ *  4. best-effort: the live server's /api/settings + the folder picker's /api/fs/dirs
+ * Snapshots the operator's config first and restores it exactly as found when
+ * finished — running this on a live install must never lose the setup or key.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { executeToolCall } from '../src/core/tools.js';
-import { applySettings, buildsRoot, dataPath, dataRoot, llmKeyInfo, setupState } from '../src/core/settings.js';
+import { applySettings, buildsRoot, dataPath, dataRoot, llmKeyInfo, loadConfig, setupState } from '../src/core/settings.js';
 import * as store from '../src/core/store.js';
 import { completeReply, llmMode } from '../src/core/llm.js';
 
@@ -20,6 +21,9 @@ if (!process.cwd().toLowerCase().endsWith('looper-harness')) {
   console.error(`refusing to run outside D:\\looper-harness (cwd=${process.cwd()})`);
   process.exit(1);
 }
+
+// Restored at the very end — never clobber a live install's setup or key.
+const originalConfig = loadConfig();
 
 let fails = 0;
 const check = (label: string, ok: boolean, detail = ''): void => {
@@ -215,9 +219,60 @@ try {
     rset.status === 200 && rsetBody.dataDir?.configured === null && rsetBody.setupComplete === false,
   );
 
+  console.log('\n===== folder picker (fs browse) =====');
+  const homeListing = (await (await fetch(`${base}/api/fs/dirs`)).json()) as {
+    listing?: { path?: string; entries?: { name: string }[]; roots?: { path: string }[]; home?: string };
+  };
+  check(
+    'GET /api/fs/dirs lists a real folder (no path → home)',
+    typeof homeListing.listing?.path === 'string' && Array.isArray(homeListing.listing.entries),
+    homeListing.listing?.path ?? '',
+  );
+  check(
+    'roots + home exposed for quick jumps',
+    (homeListing.listing?.roots?.length ?? 0) > 0 && typeof homeListing.listing?.home === 'string',
+    (homeListing.listing?.roots ?? []).map((r) => r.path).join(' · '),
+  );
+
+  const probeDir = path.join(os.tmpdir(), `looper-fs-test-${Date.now()}`);
+  fs.mkdirSync(path.join(probeDir, 'alpha'), { recursive: true });
+  fs.mkdirSync(path.join(probeDir, 'beta', 'nested'), { recursive: true });
+  const listing = (await (await fetch(`${base}/api/fs/dirs?path=${encodeURIComponent(probeDir)}`)).json()) as {
+    listing?: { path?: string; parent?: string | null; entries?: { name: string }[] };
+  };
+  const entryNames = (listing.listing?.entries ?? []).map((e) => e.name);
+  check('lists subfolders alphabetically', JSON.stringify(entryNames) === JSON.stringify(['alpha', 'beta']), entryNames.join(', '));
+  check('parent resolves one level up', listing.listing?.parent === path.dirname(probeDir), String(listing.listing?.parent));
+  const nested = (await (await fetch(`${base}/api/fs/dirs?path=${encodeURIComponent(path.join(probeDir, 'beta', 'nested'))}`)).json()) as {
+    listing?: { path?: string };
+  };
+  check('nested folder reachable', nested.listing?.path === path.join(probeDir, 'beta', 'nested'));
+  const missing = await fetch(`${base}/api/fs/dirs?path=${encodeURIComponent(path.join(probeDir, 'missing'))}`);
+  check('missing folder → 400 with message', missing.status === 400, String(missing.status));
+  const relative = await fetch(`${base}/api/fs/dirs?path=${encodeURIComponent('relative/nope')}`);
+  check('relative path → 400 (absolute required)', relative.status === 400, String(relative.status));
+  fs.rmSync(probeDir, { recursive: true, force: true });
+
   for (const dir of [tmpData2, tmpBuilds2]) fs.rmSync(dir, { recursive: true, force: true });
 } catch (err) {
   console.log(`(skipped — dev server not reachable: ${(err as Error).message})`);
+}
+
+// Put the operator's real configuration back exactly as it was found.
+try {
+  applySettings({
+    dataDir: originalConfig.dataDir,
+    buildsDir: originalConfig.buildsDir,
+    deepseekApiKey: originalConfig.deepseekApiKey,
+    setupComplete: originalConfig.setupComplete,
+  });
+  check(
+    'operator config restored as found',
+    true,
+    originalConfig.setupComplete ? 'setup state + stored key preserved' : 'fresh state preserved',
+  );
+} catch (err) {
+  check('operator config restored as found', false, (err as Error).message);
 }
 
 console.log(fails === 0 ? '\nALL GREEN' : `\n${fails} FAILURE(S)`);

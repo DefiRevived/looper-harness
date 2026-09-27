@@ -17,10 +17,16 @@
           hosted copy of your agent's data.
         </p>
         <label class="settings-label" for="setup-data-dir">agent data directory <span class="setup-sub">memory · sessions · transcripts · caches</span></label>
-        <input id="setup-data-dir" type="text" placeholder="…" autocomplete="off" spellcheck="false" />
+        <div class="dir-row">
+          <input id="setup-data-dir" type="text" placeholder="…" autocomplete="off" spellcheck="false" />
+          <button class="btn btn-ghost dir-browse" type="button" data-dir-target="setup-data-dir" title="browse folders on this machine">browse…</button>
+        </div>
         <p class="settings-hint" id="setup-data-effective">—</p>
         <label class="settings-label" for="setup-builds-dir">builds &amp; projects directory</label>
-        <input id="setup-builds-dir" type="text" placeholder="…" autocomplete="off" spellcheck="false" />
+        <div class="dir-row">
+          <input id="setup-builds-dir" type="text" placeholder="…" autocomplete="off" spellcheck="false" />
+          <button class="btn btn-ghost dir-browse" type="button" data-dir-target="setup-builds-dir" title="browse folders on this machine">browse…</button>
+        </div>
         <p class="settings-hint" id="setup-builds-effective">—</p>
         <label class="settings-label" for="setup-api-key">deepseek api key <span class="setup-sub">the agent's brain</span></label>
         <input id="setup-api-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
@@ -215,14 +221,20 @@
         </div>
         <div class="settings-body">
           <label class="settings-label" for="settings-data-dir">agent data directory</label>
-          <input id="settings-data-dir" type="text" placeholder="loading…" autocomplete="off" spellcheck="false" />
+          <div class="dir-row">
+            <input id="settings-data-dir" type="text" placeholder="loading…" autocomplete="off" spellcheck="false" />
+            <button class="btn btn-ghost dir-browse" type="button" data-dir-target="settings-data-dir" title="browse folders on this machine">browse…</button>
+          </div>
           <p class="settings-hint" id="settings-data-effective">—</p>
           <p class="settings-hint">
             Memory, sessions, transcripts and caches live here — everything stays on this machine. Empty =
             default; switching starts fresh at the new location, existing files stay where they are.
           </p>
           <label class="settings-label" for="settings-builds-dir">builds &amp; projects directory</label>
-          <input id="settings-builds-dir" type="text" placeholder="loading…" autocomplete="off" spellcheck="false" />
+          <div class="dir-row">
+            <input id="settings-builds-dir" type="text" placeholder="loading…" autocomplete="off" spellcheck="false" />
+            <button class="btn btn-ghost dir-browse" type="button" data-dir-target="settings-builds-dir" title="browse folders on this machine">browse…</button>
+          </div>
           <p class="settings-hint" id="settings-builds-effective">—</p>
           <p class="settings-hint">
             Where new builds and npm projects are created. Existing builds stay in the directory they were
@@ -255,6 +267,29 @@
         <div class="wallet-panel-actions">
           <button class="btn" type="button" id="wallet-panel-reject">reject</button>
           <button class="btn btn-accent" type="button" id="wallet-panel-approve">approve</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal hidden" id="dir-modal">
+      <div class="modal-card modal-card-narrow dir-picker-card">
+        <div class="modal-head">
+          <span>CHOOSE A FOLDER</span>
+          <button class="btn btn-ghost" type="button" id="dir-close">✕</button>
+        </div>
+        <div class="settings-body dir-picker-body">
+          <div class="dir-path-row">
+            <button class="btn btn-ghost" type="button" id="dir-up" title="up one level">↑</button>
+            <input id="dir-path" type="text" placeholder="folder path…" autocomplete="off" spellcheck="false" />
+            <button class="btn" type="button" id="dir-go">go</button>
+          </div>
+          <div class="dir-roots" id="dir-roots"></div>
+          <p class="settings-error" id="dir-status"></p>
+          <div class="dir-list" id="dir-list"></div>
+          <p class="settings-hint" id="dir-note">folders on this machine — click to open one; “use this folder” confirms the path shown above.</p>
+          <div class="settings-actions">
+            <button class="btn btn-ghost" type="button" id="dir-cancel">cancel</button>
+            <button class="btn btn-accent" type="button" id="dir-choose">use this folder</button>
+          </div>
         </div>
       </div>
     </div>

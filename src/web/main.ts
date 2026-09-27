@@ -120,6 +120,16 @@ const settingsReset = $<HTMLButtonElement>('settings-reset');
 const settingsApiKey = $<HTMLInputElement>('settings-api-key');
 const settingsKeyStatus = $<HTMLParagraphElement>('settings-key-status');
 const settingsKeyClear = $<HTMLButtonElement>('settings-key-clear');
+const dirModal = $<HTMLDivElement>('dir-modal');
+const dirPath = $<HTMLInputElement>('dir-path');
+const dirUp = $<HTMLButtonElement>('dir-up');
+const dirGo = $<HTMLButtonElement>('dir-go');
+const dirRoots = $<HTMLDivElement>('dir-roots');
+const dirList = $<HTMLDivElement>('dir-list');
+const dirStatus = $<HTMLParagraphElement>('dir-status');
+const dirClose = $<HTMLButtonElement>('dir-close');
+const dirCancel = $<HTMLButtonElement>('dir-cancel');
+const dirChoose = $<HTMLButtonElement>('dir-choose');
 const setupEl = $<HTMLDivElement>('setup');
 const setupDataDir = $<HTMLInputElement>('setup-data-dir');
 const setupDataEffective = $<HTMLParagraphElement>('setup-data-effective');
@@ -980,6 +990,106 @@ async function openSettings(): Promise<void> {
 
 function closeSettings(): void {
   settingsModal.classList.add('hidden');
+}
+
+/* ---------- folder picker (walks the REAL local filesystem) --------------- */
+
+interface DirListing {
+  path: string;
+  parent: string | null;
+  entries: { name: string; path: string }[];
+  roots: { name: string; path: string }[];
+  home: string;
+  truncated: boolean;
+}
+
+let dirPickHandler: ((path: string) => void) | null = null;
+let dirCurrent = '';
+let dirParent: string | null = null;
+
+function renderDirRoots(listing: DirListing): void {
+  dirRoots.innerHTML = '';
+  for (const root of listing.roots) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'btn btn-ghost dir-chip';
+    chip.textContent = root.name;
+    chip.title = root.path;
+    chip.addEventListener('click', () => void loadDir(root.path));
+    dirRoots.appendChild(chip);
+  }
+}
+
+function renderDirList(listing: DirListing): void {
+  dirList.innerHTML = '';
+  for (const entry of listing.entries) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'dir-item';
+    item.textContent = `📁 ${entry.name}`;
+    item.title = entry.path;
+    item.addEventListener('click', () => void loadDir(entry.path));
+    dirList.appendChild(item);
+  }
+  if (!listing.entries.length || listing.truncated) {
+    const note = document.createElement('div');
+    note.className = 'dir-empty';
+    note.textContent = listing.entries.length
+      ? `… listing capped at ${listing.entries.length} folders`
+      : 'no subfolders here — confirm this folder, or go up';
+    dirList.appendChild(note);
+  }
+}
+
+async function loadDir(target?: string): Promise<void> {
+  dirStatus.textContent = '';
+  dirList.innerHTML = '';
+  const loading = document.createElement('div');
+  loading.className = 'dir-loading';
+  loading.textContent = 'reading folders…';
+  dirList.appendChild(loading);
+  try {
+    const query = target?.trim() ? `?path=${encodeURIComponent(target.trim())}` : '';
+    const { listing } = await getJson<{ listing: DirListing }>(`/api/fs/dirs${query}`);
+    dirCurrent = listing.path;
+    dirParent = listing.parent;
+    dirPath.value = listing.path;
+    dirUp.disabled = !listing.parent;
+    renderDirRoots(listing);
+    renderDirList(listing);
+  } catch (err) {
+    dirStatus.textContent = (err as Error).message;
+    dirList.innerHTML = '';
+    if (dirCurrent) dirPath.value = dirCurrent;
+  }
+}
+
+function openDirPicker(current: string, apply: (path: string) => void): void {
+  dirPickHandler = apply;
+  dirCurrent = '';
+  dirParent = null;
+  dirModal.classList.remove('hidden');
+  const start = current.trim();
+  void (async () => {
+    await loadDir(start || undefined);
+    if (start && !dirCurrent) {
+      await loadDir(undefined);
+      dirStatus.textContent = `couldn't open "${start}" — starting at your home folder`;
+    }
+  })();
+}
+
+function closeDirPicker(): void {
+  dirModal.classList.add('hidden');
+  dirPickHandler = null;
+}
+
+function confirmDirPick(): void {
+  if (dirPickHandler && dirCurrent) {
+    dirPickHandler(dirCurrent);
+    toast(`folder selected — ${dirCurrent}`);
+  }
+  closeDirPicker();
 }
 
 async function saveSettings(): Promise<void> {
@@ -1861,6 +1971,32 @@ settingsReset.addEventListener('click', () => void resetSettings());
 settingsKeyClear.addEventListener('click', () => void clearApiKey());
 setupSave.addEventListener('click', () => void saveSetup(false));
 setupDefaults.addEventListener('click', () => void saveSetup(true));
+
+for (const browseButton of document.querySelectorAll<HTMLButtonElement>('.dir-browse')) {
+  browseButton.addEventListener('click', () => {
+    const input = document.getElementById(browseButton.dataset.dirTarget ?? '') as HTMLInputElement | null;
+    if (!input) return;
+    openDirPicker(input.value.trim() || input.placeholder.trim(), (picked) => {
+      input.value = picked;
+    });
+  });
+}
+dirGo.addEventListener('click', () => void loadDir(dirPath.value));
+dirUp.addEventListener('click', () => {
+  if (dirParent) void loadDir(dirParent);
+});
+dirPath.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void loadDir(dirPath.value);
+  }
+});
+dirClose.addEventListener('click', closeDirPicker);
+dirCancel.addEventListener('click', closeDirPicker);
+dirChoose.addEventListener('click', confirmDirPick);
+dirModal.addEventListener('click', (event) => {
+  if (event.target === dirModal) closeDirPicker();
+});
 
 tokenForm.addEventListener('submit', (event) => {
   event.preventDefault();

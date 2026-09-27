@@ -17,6 +17,7 @@ import { allLocks, forgetEntry, listMemoryEntries, lockRemove, taskComplete, tas
 import { listActivity } from '../core/activity.js';
 import { runDream } from '../core/dreams.js';
 import { createChallenge, validateProof, verifyOwnership } from '../core/ownership.js';
+import { listDirectories } from '../core/fsBrowse.js';
 import { applySettings, buildsRoot, setupState } from '../core/settings.js';
 import { inspectTransaction, parseChain, READ_RPC_METHODS, rpcRead } from '../core/web3.js';
 import { listTranscripts, readTranscript } from '../core/transcripts.js';
@@ -298,6 +299,20 @@ apiRouter.post('/settings', (req, res) => {
       ...(hasSetup ? { setupComplete: body.setupComplete === true } : {}),
     });
     res.json({ ok: true, ...state });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// --- local folder picker: read-only listings of the operator's filesystem ---
+// The console's browse… buttons walk the REAL machine through these listings
+// (a browser alone cannot reveal absolute paths). Same local-first trust model
+// as /api/settings: read-only, relative paths rejected, nothing written.
+
+apiRouter.get('/fs/dirs', (req, res) => {
+  try {
+    const requested = typeof req.query.path === 'string' ? req.query.path : undefined;
+    res.json({ listing: listDirectories(requested) });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }

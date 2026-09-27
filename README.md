@@ -83,7 +83,10 @@ computer — there is no hosted copy of your agent's data:
   is generated in the activated Looper's persona (codex traits, voice, values).
 
 Both default to folders inside the app directory and can point anywhere on disk (e.g. a folder you keep in
-your editor or back up). The server validates each path, creates it, and write-probes it. Both are editable
+your editor or back up). Use the **browse…** button beside a field to pick a folder with a built-in picker
+that walks this machine's real directories — quick jumps to your home folder and drives, click to open,
+confirm to use. (The picker reads the local filesystem through the runtime itself: read-only, nothing is
+uploaded.) The server validates each path, creates it, and write-probes it. Both are editable
 at any time via the ⚙ settings panel; `LOOPER_DATA_DIR` / `LOOPER_BUILDS_DIR` in `.env` override the stored
 choice. Switching directories starts fresh at the new location — existing files stay where they are.
 
