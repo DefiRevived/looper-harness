@@ -10,6 +10,7 @@ import { executeToolCall, toolSpecsForSurface, type ToolContext } from '../src/c
 import { listVersions } from '../src/core/versions.js';
 import { looperImageCount, resolveLooperImages } from '../src/core/looperAssets.js';
 import { memoryRecall, memoryRemember, purgeTokenMemory, taskAdd, taskComplete, taskList } from '../src/core/memory.js';
+import { buildsRoot } from '../src/core/settings.js';
 
 const TOKEN = 999999;
 const call = (ctx: ToolContext, name: string, args: Record<string, unknown>) =>
@@ -21,7 +22,7 @@ console.log('telegram:', toolSpecsForSurface('telegram').map((t) => t.function.n
 console.log('discord:', toolSpecsForSurface('discord').length, '(expect 0)');
 
 await purgeTokenMemory(TOKEN);
-const dir = path.join('data', 'artifacts', 'web_999999');
+const dir = path.join(buildsRoot(), 'web_999999');
 fs.mkdirSync(dir, { recursive: true });
 const vid = '1790000000004-version-test';
 const vctx: ToolContext = { sessionKey: `web:999999:build:${vid}`, surface: 'web', tokenId: TOKEN, buildId: vid };

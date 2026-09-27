@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { executeToolCall, type ToolContext } from '../src/core/tools.js';
 import { locksFor, memoryRecall, memoryRemember, purgeTokenMemory } from '../src/core/memory.js';
+import { buildsRoot } from '../src/core/settings.js';
 
 const TOKEN = 999999;
 const call = (ctx: ToolContext, name: string, args: Record<string, unknown>) =>
@@ -31,7 +32,7 @@ console.log('console content:', inConsole[0]?.content);
 const otherToken = await memoryRecall({ tokenId: 452, limit: 5 });
 console.log(`cross-token isolation: ${otherToken.length} entries under token 452 (informational — nothing should leak between tokens)`);
 
-const dir = path.join('data', 'artifacts', 'web_999999');
+const dir = path.join(buildsRoot(), 'web_999999');
 const folder = path.join(dir, buildId);
 fs.mkdirSync(folder, { recursive: true });
 fs.writeFileSync(path.join(folder, 'index.html'), '<!DOCTYPE html><html><head><title>LOCK TEST</title></head><body>header copy v1</body></html>');

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { executeToolCall } from '../src/core/tools.js';
 import { libManifest } from '../src/core/libs.js';
+import { buildsRoot } from '../src/core/settings.js';
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = ''): void => {
@@ -34,7 +35,7 @@ check('list_libs gives the exact script path', libsResult.modelText.includes('/l
 check('list_libs states the rule (only scripts + CDN ban)', /ONLY scripts/i.test(libsResult.modelText) && /CDN\/remote URLs/i.test(libsResult.modelText));
 
 // 3) check_build — scratch build with a local lib + a CDN ref, then clean
-const dir = path.resolve('data', 'artifacts', 'web_999997');
+const dir = path.join(buildsRoot(), 'web_999997');
 fs.mkdirSync(dir, { recursive: true });
 const buildId = `${Date.now()}-lib-check`;
 const folder = path.join(dir, buildId);

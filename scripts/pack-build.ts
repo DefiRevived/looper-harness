@@ -5,7 +5,7 @@
  *   npm run pack-build -- <build-id> [--session web:<tokenId>]
  *
  * What it does:
- *   1. reads the build folder from data/artifacts/<session>/<build-id>
+ *   1. reads the build folder from the builds directory (default data/artifacts)
  *   2. copies the WHOLE project tree (multi-file builds: index.html + css/ +
  *      js/ + assets/…; single-document builds work the same), resolving
  *      {{looper-image:ID}} placeholders IN-PROCESS in every text file (same
@@ -28,6 +28,7 @@ import path from 'node:path';
 import { resolveLooperImages } from '../src/core/looperAssets.js';
 import { sessionDirName } from '../src/core/tools.js';
 import { config } from '../src/core/config.js';
+import { buildsRoot } from '../src/core/settings.js';
 
 const args = process.argv.slice(2);
 const sessionIdx = args.indexOf('--session');
@@ -37,7 +38,7 @@ const buildId = args.find((a, i) => !a.startsWith('--') && (sessionIdx < 0 || i 
 
 if (!buildId || !/^[0-9]+-[a-z0-9-]{1,80}$/.test(buildId)) {
   console.error('usage: npm run pack-build -- <build-id> [--session web:<tokenId>]');
-  console.error('       (build-id looks like 1790381091094-my-build — a folder under data/artifacts; see the builds tab)');
+  console.error('       (build-id looks like 1790381091094-my-build — a folder under the builds directory; see the ⚙ settings + builds tab)');
   process.exit(1);
 }
 if (!session) {
@@ -46,7 +47,7 @@ if (!session) {
 }
 
 const dirName = sessionDirName(session);
-const folder = path.resolve('data', 'artifacts', dirName, buildId);
+const folder = path.join(buildsRoot(), dirName, buildId);
 // Node project builds (package.json) are hosted from their BUILT dist/.
 const isProject = fs.existsSync(path.join(folder, 'package.json'));
 const siteRoot = isProject ? path.join(folder, 'dist') : folder;

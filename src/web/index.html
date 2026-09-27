@@ -22,6 +22,7 @@
         </form>
         <p class="activation-error" id="activation-error"></p>
         <p class="activation-note">or set <code>LOOPER_TOKEN_ID</code> in the server's <code>.env</code> and reload.</p>
+        <button class="btn btn-ghost activation-gear" type="button" id="activation-settings">⚙ settings</button>
       </div>
     </div>
     <header class="topbar">
@@ -38,6 +39,7 @@
         <button class="view-tab" data-view="archive" type="button">archive</button>
       </nav>
       <div class="top-actions">
+        <button class="btn btn-ghost" type="button" id="settings-open" title="settings">⚙</button>
         <span class="chip" id="mode-chip">loading…</span>
         <span class="chip chip-dim" id="chain-chip">base</span>
         <form class="token-picker" id="token-form">
@@ -172,6 +174,28 @@
           <button class="btn btn-ghost" type="button" id="version-modal-close">✕</button>
         </div>
         <iframe id="version-modal-frame" sandbox="allow-scripts" title="archived version preview"></iframe>
+      </div>
+    </div>
+    <div class="modal hidden" id="settings-modal">
+      <div class="modal-card modal-card-narrow">
+        <div class="modal-head">
+          <span>SETTINGS</span>
+          <button class="btn btn-ghost" type="button" id="settings-close">✕</button>
+        </div>
+        <div class="settings-body">
+          <label class="settings-label" for="settings-builds-dir">builds &amp; projects directory</label>
+          <input id="settings-builds-dir" type="text" placeholder="loading…" autocomplete="off" spellcheck="false" />
+          <p class="settings-hint" id="settings-effective">—</p>
+          <p class="settings-hint">
+            Where new builds and npm projects are created. Existing builds stay in the directory they were
+            created in. <code>LOOPER_BUILDS_DIR</code> in <code>.env</code> overrides this setting.
+          </p>
+          <p class="settings-error" id="settings-status"></p>
+          <div class="settings-actions">
+            <button class="btn" type="button" id="settings-reset">reset to default</button>
+            <button class="btn btn-accent" type="button" id="settings-save">save</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="wallet-panel hidden" id="wallet-panel">

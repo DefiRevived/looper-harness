@@ -17,6 +17,7 @@ import { allLocks, forgetEntry, listMemoryEntries, lockRemove, taskComplete, tas
 import { listActivity } from '../core/activity.js';
 import { runDream } from '../core/dreams.js';
 import { createChallenge, validateProof, verifyOwnership } from '../core/ownership.js';
+import { buildsDirInfo, buildsRoot, setBuildsDir } from '../core/settings.js';
 import { inspectTransaction, parseChain, READ_RPC_METHODS, rpcRead } from '../core/web3.js';
 import { listTranscripts, readTranscript } from '../core/transcripts.js';
 import * as store from '../core/store.js';
@@ -50,7 +51,7 @@ apiRouter.use('/web3', (req, res, next) => {
 
 function artifactPath(sessionRaw: string, idRaw: string): string | null {
   if (!/^[a-z0-9_-]{1,64}$/.test(sessionRaw) || !/^[0-9]+-[a-z0-9-]{1,80}$/.test(idRaw)) return null;
-  const root = path.resolve(config.dataDir, 'artifacts', sessionRaw);
+  const root = path.join(buildsRoot(), sessionRaw);
   const folder = path.resolve(root, idRaw);
   return folder.startsWith(root + path.sep) ? folder : null;
 }
@@ -261,6 +262,30 @@ apiRouter.post('/ownership/verify', async (req, res) => {
     return;
   }
   res.json({ ok: true, tokenId: result.tokenId, address: result.address, proof: result.proof });
+});
+
+// --- operator settings (builds directory etc.) -------------------------------
+
+apiRouter.get('/settings', (_req, res) => {
+  res.json({ buildsDir: buildsDirInfo(), dataDir: config.dataDir });
+});
+
+apiRouter.post('/settings', (req, res) => {
+  const body = (req.body ?? {}) as { buildsDir?: unknown };
+  if (!('buildsDir' in body)) {
+    res.status(400).json({ error: 'buildsDir is required (pass a path, or null to reset to the default)' });
+    return;
+  }
+  if (body.buildsDir !== null && typeof body.buildsDir !== 'string') {
+    res.status(400).json({ error: 'buildsDir must be a path string or null' });
+    return;
+  }
+  try {
+    const info = setBuildsDir((body.buildsDir as string | null) ?? null);
+    res.json({ ok: true, buildsDir: info });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
 });
 
 // Wallet reads hit an RPC and the vitals panel polls — cache per address briefly.

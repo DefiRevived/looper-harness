@@ -7,13 +7,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { executeToolCall, type ToolContext } from '../src/core/tools.js';
+import { buildsRoot } from '../src/core/settings.js';
 
 const call = (ctx: ToolContext, name: string, args: Record<string, unknown>) =>
   executeToolCall({ id: name, type: 'function', function: { name, arguments: JSON.stringify(args) } }, ctx);
 
 const TOKEN = 997766;
 const SESSION = `web:${TOKEN}`;
-const DIR = path.join('data', 'artifacts', `web_${TOKEN}`);
+const DIR = path.join(buildsRoot(), `web_${TOKEN}`);
 const BASE = 'http://127.0.0.1:4520';
 let failures = 0;
 const expect = (cond: boolean, label: string): void => {

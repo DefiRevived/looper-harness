@@ -33,6 +33,7 @@ LOOPER_TOKEN_ID=452             # REQUIRED — the token this runtime embodies (
 DEEPSEEK_API_KEY=               # empty → mock brain (the UI says so)
 DEEPSEEK_MODEL=deepseek-flash   # valid names: deepseek-flash, deepseek-v4-pro
 BASE_RPC_URL=https://mainnet.base.org
+LOOPER_BUILDS_DIR=              # optional — where builds/projects go (default <data>/artifacts)
 ```
 
 If `LOOPER_TOKEN_ID` is empty, the console asks for the token id on first boot — enter a Looper you own,
@@ -63,6 +64,17 @@ sign the gas-free ownership message, and the runtime loads its identity, codex a
   nightly "dream" synthesis, tasks and locks.
 - **Adapters** — Telegram/Discord bots sharing the brain (Telegram gets a small read-only tool lane) and an
   MCP server over stdio.
+
+## Settings
+
+The console has a settings panel (⚙ in the top bar):
+
+- **Builds directory** — where builds and npm projects are created. The default lives inside the app data
+  folder; point it at any directory on your machine (e.g. a folder you keep in your editor). The server
+  validates, creates it, and writes a probe file to prove it's writable. Existing builds stay in the
+  directory they were created in.
+- Precedence: `LOOPER_BUILDS_DIR` (`.env`) → the saved setting → default. The panel shows which one is in
+  effect.
 
 ## Ownership verification
 

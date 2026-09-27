@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { executeToolCall, type ToolContext } from '../src/core/tools.js';
+import { buildsRoot } from '../src/core/settings.js';
 
 const call = (ctx: ToolContext, name: string, args: Record<string, unknown>) =>
   executeToolCall({ id: name, type: 'function', function: { name, arguments: JSON.stringify(args) } }, ctx);
@@ -14,7 +15,7 @@ const call = (ctx: ToolContext, name: string, args: Record<string, unknown>) =>
 const scratchToken = 998877;
 const scratchSession = `web:${scratchToken}`;
 const consoleCtx: ToolContext = { sessionKey: scratchSession, surface: 'web', tokenId: scratchToken };
-const scratchDir = path.join('data', 'artifacts', `web_${scratchToken}`);
+const scratchDir = path.join(buildsRoot(), `web_${scratchToken}`);
 let failures = 0;
 function expect(cond: boolean, label: string): void {
   console.log(`  ${cond ? '✓' : '✗ FAIL'} ${label}`);

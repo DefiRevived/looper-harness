@@ -106,6 +106,15 @@ const versionModal = $<HTMLDivElement>('version-modal');
 const versionModalTitle = $<HTMLSpanElement>('version-modal-title');
 const versionModalFrame = $<HTMLIFrameElement>('version-modal-frame');
 const versionModalClose = $<HTMLButtonElement>('version-modal-close');
+const settingsOpen = $<HTMLButtonElement>('settings-open');
+const activationSettings = $<HTMLButtonElement>('activation-settings');
+const settingsModal = $<HTMLDivElement>('settings-modal');
+const settingsClose = $<HTMLButtonElement>('settings-close');
+const settingsBuildsDir = $<HTMLInputElement>('settings-builds-dir');
+const settingsEffective = $<HTMLParagraphElement>('settings-effective');
+const settingsStatus = $<HTMLParagraphElement>('settings-status');
+const settingsSave = $<HTMLButtonElement>('settings-save');
+const settingsReset = $<HTMLButtonElement>('settings-reset');
 const toastEl = $<HTMLDivElement>('toast');
 const buildCards = new Map<string, HTMLElement>();
 let unseenBuilds = 0;
@@ -767,6 +776,78 @@ async function openVersionModal(buildId: string, index: number, date: string): P
     versionModalFrame.srcdoc = await res.text();
   } catch {
     versionModalFrame.srcdoc = '<p style="font-family:monospace;color:#666">version unavailable</p>';
+  }
+}
+
+/* ---------- settings ---------- */
+
+interface BuildsDirInfo {
+  effective: string;
+  configured: string | null;
+  envOverride: string | null;
+  defaultPath: string;
+  source: 'env' | 'settings' | 'default';
+}
+
+function renderSettings(d: BuildsDirInfo): void {
+  settingsBuildsDir.value = d.configured ?? '';
+  settingsBuildsDir.placeholder = d.defaultPath;
+  const sourceNote =
+    d.source === 'env'
+      ? 'set by LOOPER_BUILDS_DIR (.env) — it overrides this setting'
+      : d.source === 'settings'
+        ? 'from this setting'
+        : 'default (inside the app data folder)';
+  settingsEffective.textContent = `effective now: ${d.effective} — ${sourceNote}`;
+}
+
+async function openSettings(): Promise<void> {
+  settingsModal.classList.remove('hidden');
+  settingsStatus.textContent = '';
+  settingsEffective.textContent = 'loading…';
+  settingsBuildsDir.value = '';
+  try {
+    const data = await getJson<{ buildsDir: BuildsDirInfo }>('/api/settings');
+    renderSettings(data.buildsDir);
+  } catch (err) {
+    settingsEffective.textContent = `couldn't load settings — ${(err as Error).message}`;
+  }
+}
+
+function closeSettings(): void {
+  settingsModal.classList.add('hidden');
+}
+
+async function saveSettings(): Promise<void> {
+  settingsStatus.textContent = '';
+  const value = settingsBuildsDir.value.trim();
+  if (!value) {
+    settingsStatus.textContent = 'enter a directory path — or use “reset to default”.';
+    return;
+  }
+  settingsSave.disabled = true;
+  try {
+    const res = await postJson<{ ok: boolean; buildsDir: BuildsDirInfo }>('/api/settings', { buildsDir: value });
+    renderSettings(res.buildsDir);
+    toast(`builds now save to ${res.buildsDir.effective}`);
+  } catch (err) {
+    settingsStatus.textContent = (err as Error).message;
+  } finally {
+    settingsSave.disabled = false;
+  }
+}
+
+async function resetSettings(): Promise<void> {
+  settingsStatus.textContent = '';
+  settingsReset.disabled = true;
+  try {
+    const res = await postJson<{ ok: boolean; buildsDir: BuildsDirInfo }>('/api/settings', { buildsDir: null });
+    renderSettings(res.buildsDir);
+    toast('builds directory back to default');
+  } catch (err) {
+    settingsStatus.textContent = (err as Error).message;
+  } finally {
+    settingsReset.disabled = false;
   }
 }
 
@@ -1514,6 +1595,14 @@ versionModalClose.addEventListener('click', closeVersionModal);
 versionModal.addEventListener('click', (event) => {
   if (event.target === versionModal) closeVersionModal();
 });
+settingsOpen.addEventListener('click', () => void openSettings());
+activationSettings.addEventListener('click', () => void openSettings());
+settingsClose.addEventListener('click', closeSettings);
+settingsModal.addEventListener('click', (event) => {
+  if (event.target === settingsModal) closeSettings();
+});
+settingsSave.addEventListener('click', () => void saveSettings());
+settingsReset.addEventListener('click', () => void resetSettings());
 
 tokenForm.addEventListener('submit', (event) => {
   event.preventDefault();

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { buildsRoot } from './settings.js';
 import { loadLooper } from './codex.js';
 import { readAgentBindings, readWalletBalances } from './chain.js';
 import { readHelixaCred } from './cred.js';
@@ -97,7 +98,7 @@ function validateBuildFilePath(rel: unknown): string | null {
   return null;
 }
 
-const artifactsRoot = path.join(config.dataDir, 'artifacts');
+// Builds root is resolved per call (env > settings panel > data dir default).
 
 export function sessionDirName(sessionKey: string): string {
   return sessionKey.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 64) || 'session';
@@ -128,7 +129,7 @@ export function kindOfSource(source: string): 'html' | 'svg' {
 /** Absolute folder for a build — path-traversal safe. */
 function buildFolder(parentKey: string, buildId: string): string | null {
   if (!BUILD_ID_RE.test(buildId)) return null;
-  const dir = path.join(artifactsRoot, sessionDirName(parentKey));
+  const dir = path.join(buildsRoot(), sessionDirName(parentKey));
   const folder = path.join(dir, buildId);
   return folder.startsWith(dir + path.sep) ? folder : null;
 }
@@ -358,7 +359,7 @@ function renderArtifact(args: Record<string, unknown>, ctx: ToolContext): ToolRe
     };
   }
 
-  const folder = path.join(artifactsRoot, dirName, id);
+  const folder = path.join(buildsRoot(), dirName, id);
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, `index.${kind}`), content, 'utf8');
   for (const f of extra) {
@@ -2517,7 +2518,7 @@ const FILE_RE = /^[0-9]+-[a-z0-9-]{1,80}$/;
 
 /** List folder-per-build artifacts for a session, newest first (console + agent). */
 export function listArtifacts(sessionKey: string): Artifact[] {
-  const dir = path.join(artifactsRoot, sessionDirName(sessionKey));
+  const dir = path.join(buildsRoot(), sessionDirName(sessionKey));
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });

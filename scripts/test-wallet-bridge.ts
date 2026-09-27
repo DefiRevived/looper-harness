@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
 import { encodeFunctionData } from 'viem';
+import { buildsRoot } from '../src/core/settings.js';
 
 const BASE = 'http://127.0.0.1:4520';
 const TOKEN = 452;
@@ -127,7 +128,7 @@ check('inspect detects over-balance revert', inspectRevert.simulation.ok === fal
 
 // ---------------------------------------------------------------- 2. browser side
 
-const scratchDir = path.join('data', 'artifacts', `web_${TOKEN}`);
+const scratchDir = path.join(buildsRoot(), `web_${TOKEN}`);
 fs.mkdirSync(scratchDir, { recursive: true });
 const scratchId = `${Date.now()}-wallet-bridge-test`;
 const scratchFolder = path.join(scratchDir, scratchId);

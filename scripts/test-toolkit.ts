@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { executeToolCall } from '../src/core/tools.js';
+import { buildsRoot } from '../src/core/settings.js';
 
 const ctx = { sessionKey: 'web:452', surface: 'web' as const, tokenId: 452 };
 const call = (name: string, args: Record<string, unknown>) =>
@@ -23,7 +24,7 @@ console.log('\n===== remember/recall =====');
 console.log('(now ReMEM-backed — covered by scripts/test-memory-locks.ts)');
 
 console.log('\n===== delete_build roundtrip (scratch session) =====');
-const dir = path.join('data', 'artifacts', 'web_smoke');
+const dir = path.join(buildsRoot(), 'web_smoke');
 fs.mkdirSync(dir, { recursive: true });
 const tempId = '1790000000000-smoke-test';
 fs.mkdirSync(path.join(dir, tempId), { recursive: true });

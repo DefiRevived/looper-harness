@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { executeToolCall, listArtifacts } from '../src/core/tools.js';
 import { config } from '../src/core/config.js';
+import { buildsRoot } from '../src/core/settings.js';
 import type { ToolCall } from '../src/core/llm.js';
 
 const TOKEN = 452;
@@ -47,7 +48,7 @@ const shot = good.modelText.match(/screenshot saved for the operator: (.+\.png)/
 check('good build: screenshot exists on disk', Boolean(shot) && fs.existsSync(shot![1]), shot?.[1] ?? 'no path in report');
 
 // --- 2. a deliberately broken build: must be caught, not reported clean.
-const dir = path.join(config.dataDir, 'artifacts', `web_${TOKEN}`);
+const dir = path.join(buildsRoot(), `web_${TOKEN}`);
 const brokenId = `${Date.now()}-broken-render-test`;
 const brokenFolder = path.join(dir, brokenId);
 fs.mkdirSync(brokenFolder, { recursive: true });

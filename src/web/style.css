@@ -620,6 +620,11 @@ input:focus {
   margin: 0;
 }
 
+.activation-gear {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
 .layout-builds {
   flex: 1;
   padding: 14px 20px 20px;
@@ -1165,7 +1170,7 @@ input:focus {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 40;
+  z-index: 120;
   padding: 24px;
 }
 
@@ -1195,6 +1200,66 @@ input:focus {
   border: 0;
   background: #fff;
   width: 100%;
+}
+
+/* ---------- settings modal ---------- */
+
+.modal-card.modal-card-narrow {
+  width: min(560px, 100%);
+  height: auto;
+  max-height: min(90vh, 640px);
+}
+
+.settings-body {
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-label {
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#settings-builds-dir {
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  color: var(--text);
+  font: inherit;
+  padding: 9px 10px;
+  border-radius: 6px;
+}
+
+#settings-builds-dir:focus {
+  outline: 1px solid var(--accent);
+}
+
+.settings-hint {
+  color: var(--dim);
+  font-size: 11px;
+  margin: 0;
+  line-height: 1.55;
+}
+
+.settings-hint code {
+  color: var(--amber);
+}
+
+.settings-error {
+  color: #ff8d7e;
+  font-size: 11px;
+  margin: 0;
+  min-height: 14px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
 }
 
 .toast {
