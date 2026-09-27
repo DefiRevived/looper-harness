@@ -14,3 +14,8 @@ artifacts/
 
 # Static deploy staging (regenerated on demand) — keep out of VCS
 deploy/
+
+# Defensive: never let key material or scratch files sneak in
+*.pem
+*.key
+tmp-*

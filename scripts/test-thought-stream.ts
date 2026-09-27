@@ -11,6 +11,9 @@
 import { dataDirInfo, llmApiKey } from '../src/core/settings.js';
 import { streamAgentReplyWithTools, type AgentEvent } from '../src/core/brain.js';
 
+/** Live-read fixture token — override with LOOPER_TEST_TOKEN to point at your own. */
+const TOKEN = Number(process.env.LOOPER_TEST_TOKEN ?? 7777);
+
 let pass = 0;
 let fail = 0;
 const check = (label: string, ok: boolean, detail = ''): void => {
@@ -33,7 +36,7 @@ if (!llmApiKey()) {
 } else {
   console.log('\nturn 1 — plain reply: reasoning must stream BEFORE the text');
   const events: AgentEvent[] = [];
-  for await (const event of streamAgentReplyWithTools(2684, 'test:thought-stream', 'Reply with exactly: ok — do not use any tools.', 'web')) {
+  for await (const event of streamAgentReplyWithTools(TOKEN, 'test:thought-stream', 'Reply with exactly: ok — do not use any tools.', 'web')) {
     events.push(event);
   }
   const firstThought = events.findIndex((e) => e.type === 'thought' && e.text.trim());
@@ -54,7 +57,7 @@ if (!llmApiKey()) {
 
   console.log('\nturn 2 — one forced tool: start → done receipts');
   const events2: AgentEvent[] = [];
-  for await (const event of streamAgentReplyWithTools(2684, 'test:thought-stream', 'Call the list_builds tool exactly once (no other tools), then reply done.', 'web')) {
+  for await (const event of streamAgentReplyWithTools(TOKEN, 'test:thought-stream', 'Call the list_builds tool exactly once (no other tools), then reply done.', 'web')) {
     events2.push(event);
   }
   const starts = events2.filter((e) => e.type === 'tool');
