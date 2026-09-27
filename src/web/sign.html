@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LOOPER AGENT — SIWA signer</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">◉</span>
+        <span class="brand-name">SIWA SIGNER</span>
+        <span class="brand-sub">// helixa registration helper</span>
+      </div>
+      <div class="top-actions">
+        <a class="btn btn-ghost" href="/">back to console</a>
+      </div>
+    </header>
+
+    <main class="layout sign-layout">
+      <section class="panel">
+        <div class="panel-head"><h2>STEP 1 — CONNECT</h2></div>
+        <p class="ops-note">
+          Sign with the wallet that holds the Looper this registration is for. Your key never leaves the wallet —
+          this page only asks it to sign a text message. No transaction, no gas.
+        </p>
+        <button id="connect" class="btn btn-accent" type="button">connect wallet</button>
+        <div class="helixa-cred" id="wallet-status">checking for wallet…</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>STEP 2 — SIGN</h2>
+          <button id="regen" class="btn btn-ghost" type="button">new timestamp</button>
+        </div>
+        <pre class="code-block" id="message">connect a wallet first</pre>
+        <button id="sign" class="btn btn-accent" type="button" disabled>1. sign siwa message</button>
+        <button id="pay" class="btn btn-accent" type="button" disabled>2. authorize 1.00 USDC (x402)</button>
+        <div class="helixa-cred" id="pay-status"></div>
+      </section>
+
+      <aside class="panel">
+        <div class="panel-head"><h2>STEP 3 — REGISTER</h2></div>
+        <p class="ops-note">Run this in the project terminal (it mints and requests the Cred-boosting verify):</p>
+        <pre class="code-block" id="command">connect and sign first…</pre>
+        <button id="copy" class="btn" type="button" disabled>copy command</button>
+      </aside>
+    </main>
+
+    <script type="module" src="/sign.ts"></script>
+  </body>
+</html>

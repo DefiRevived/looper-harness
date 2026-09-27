@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LOOPER AGENT</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="activation hidden" id="activation">
+      <div class="activation-card">
+        <div class="activation-brand"><span class="brand-mark">◉</span> LOOPER AGENT</div>
+        <h1>Activate a Looper</h1>
+        <p>
+          This runtime embodies one Looper token — its on-chain identity, Arweave codex, art and memory.
+          Enter the token id it should serve.
+        </p>
+        <form id="activation-form">
+          <input id="activation-input" type="number" min="1" max="7777" placeholder="token id (1–7777)" autocomplete="off" />
+          <button class="btn btn-accent" type="submit">activate</button>
+        </form>
+        <p class="activation-error" id="activation-error"></p>
+        <p class="activation-note">or set <code>LOOPER_TOKEN_ID</code> in the server's <code>.env</code> and reload.</p>
+      </div>
+    </div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">◉</span>
+        <span class="brand-name">LOOPER AGENT</span>
+        <span class="brand-sub">// helixa codex runtime</span>
+      </div>
+      <nav class="view-tabs">
+        <button class="view-tab active" data-view="console" type="button">console</button>
+        <button class="view-tab" data-view="builds" type="button">builds<span class="tab-badge hidden" id="builds-badge">0</span></button>
+        <button class="view-tab" data-view="ledger" type="button">ledger<span class="tab-badge hidden" id="ledger-badge">0</span></button>
+        <button class="view-tab" data-view="memory" type="button">memory</button>
+        <button class="view-tab" data-view="archive" type="button">archive</button>
+      </nav>
+      <div class="top-actions">
+        <span class="chip" id="mode-chip">loading…</span>
+        <span class="chip chip-dim" id="chain-chip">base</span>
+        <form class="token-picker" id="token-form">
+          <label for="token-input">token</label>
+          <input id="token-input" type="number" min="1" placeholder="id" />
+          <button class="btn" type="submit">activate</button>
+        </form>
+      </div>
+    </header>
+
+    <main class="layout" id="view-console">
+      <section class="panel agent-panel">
+        <div class="agent-image-wrap">
+          <img id="agent-image" alt="Looper portrait" />
+          <div class="agent-image-fallback" id="agent-image-fallback">loading art from arweave…</div>
+        </div>
+        <div class="agent-head">
+          <h1 id="agent-name">—</h1>
+          <span class="chip chip-accent" id="agent-class">—</span>
+        </div>
+        <p class="agent-spec" id="agent-spec">—</p>
+        <p class="agent-voice" id="agent-voice">—</p>
+        <div class="meters" id="meters">
+          <div class="meter">
+            <label>risk <b id="risk-val">–</b></label>
+            <div class="meter-track"><div class="meter-fill meter-risk" id="risk-bar"></div></div>
+          </div>
+          <div class="meter">
+            <label>autonomy <b id="autonomy-val">–</b></label>
+            <div class="meter-track"><div class="meter-fill meter-auto" id="autonomy-bar"></div></div>
+          </div>
+        </div>
+        <div class="traits" id="traits"></div>
+        <footer class="provenance" id="provenance">—</footer>
+      </section>
+
+      <section class="panel chat-panel">
+        <div class="panel-head">
+          <h2>COMMS</h2>
+          <button id="chat-reset" class="btn btn-ghost" type="button">reset thread</button>
+        </div>
+        <div class="chat-log" id="chat-log"></div>
+        <form class="chat-form" id="chat-form">
+          <input id="chat-input" placeholder="give the agent a job…" autocomplete="off" />
+          <button class="btn" type="button" id="chat-stop" title="stop generating" disabled>■</button>
+          <button class="btn btn-accent" type="submit" id="chat-send">send</button>
+        </form>
+      </section>
+
+      <aside class="side-col">
+        <section class="panel ops-panel">
+          <div class="panel-head"><h2>VITALS</h2><button class="btn btn-ghost" type="button" id="vitals-refresh" title="refresh">↻</button></div>
+          <div class="vitals">
+            <div class="vital"><span class="k">wallet</span><span class="v" id="vital-wallet">—</span></div>
+            <div class="vital"><span class="k">memory</span><span class="v" id="vital-memory">—</span></div>
+            <div class="vital"><span class="k">tasks</span><span class="v" id="vital-tasks">—</span></div>
+            <div class="vital"><span class="k">locks</span><span class="v" id="vital-locks">—</span></div>
+            <div class="vital"><span class="k">builds</span><span class="v" id="vital-builds">—</span></div>
+            <div class="vital"><span class="k">context</span><span class="v" id="vital-context">—</span></div>
+          </div>
+          <div class="helixa-cred" id="helixa-cred" title="Real Cred is issued by Helixa (cred.exchange) per ERC-8004 agent.">helixa cred: —</div>
+        </section>
+        <section class="panel activity-panel">
+          <div class="panel-head"><h2>ACTIVITY</h2><button class="btn btn-ghost" type="button" id="activity-refresh" title="refresh">↻</button></div>
+          <div class="activity-list" id="activity-list"></div>
+        </section>
+      </aside>
+    </main>
+
+    <main class="layout-builds hidden" id="view-builds">
+      <section class="panel artifacts-panel" id="artifacts-panel">
+        <div class="panel-head">
+          <h2>BUILDS</h2>
+          <span class="chip chip-dim">per-build threads · sandboxed previews</span>
+        </div>
+        <div class="artifacts-empty" id="artifacts-empty">no builds yet — ask the agent to make something.</div>
+        <div class="artifacts-list" id="artifacts-list"></div>
+      </section>
+    </main>
+
+    <main class="layout-ledger hidden" id="view-ledger">
+      <section class="panel">
+        <div class="panel-head"><h2>TASK BOARD</h2><button class="btn btn-ghost" type="button" id="tasks-refresh" title="refresh">↻</button></div>
+        <div class="ledger-empty hidden" id="tasks-empty">board clear — no open tasks.</div>
+        <div class="task-list" id="tasks-open"></div>
+        <div class="panel-head sub"><h2>DONE</h2><span class="chip chip-dim" id="tasks-done-count">0</span></div>
+        <div class="task-list task-list-done" id="tasks-done"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>BUILD LOCKS</h2><button class="btn btn-ghost" type="button" id="locks-refresh" title="refresh">↻</button></div>
+        <p class="ops-note">Locks are enforced mechanically — build writers reject any change that would alter a frozen build or a locked snippet. Unlock here, or ask the agent in chat.</p>
+        <div class="locks-list" id="locks-list"></div>
+      </section>
+    </main>
+
+    <main class="layout-memory hidden" id="view-memory">
+      <section class="panel memory-panel">
+        <div class="panel-head">
+          <h2>MEMORY</h2>
+          <div class="memory-tools">
+            <input id="memory-filter" placeholder="filter…" autocomplete="off" />
+            <button class="btn btn-ghost" type="button" id="dream-now" title="run a ReMEM dream pass now">dream now</button>
+            <button class="btn btn-ghost" type="button" id="memory-refresh" title="refresh">↻</button>
+          </div>
+        </div>
+        <p class="ops-note">Everything the agent durably remembers (ReMEM): operator-wide notes, per-build notes, and distilled conversation episodes. Forgetting is immediate and permanent.</p>
+        <div class="memory-list" id="memory-list"></div>
+      </section>
+    </main>
+
+    <main class="layout-archive hidden" id="view-archive">
+      <section class="panel archive-panel">
+        <div class="panel-head"><h2>ARCHIVED THREADS</h2><button class="btn btn-ghost" type="button" id="archive-refresh" title="refresh">↻</button></div>
+        <p class="ops-note">Verbatim transcripts — every message dropped by the 60-message cap or a reset is kept here, word for word. Append-only, operator-side.</p>
+        <div class="ledger-empty hidden" id="archive-empty">nothing archived yet — transcripts appear here after a thread trims or resets.</div>
+        <div class="archive-sessions" id="archive-sessions"></div>
+      </section>
+      <section class="panel archive-log-panel">
+        <div class="panel-head">
+          <h2 id="archive-title">TRANSCRIPT</h2>
+          <div class="memory-tools"><input id="archive-search" placeholder="filter…" autocomplete="off" /></div>
+        </div>
+        <div class="ledger-empty" id="archive-placeholder">select a thread on the left.</div>
+        <div class="archive-events" id="archive-events"></div>
+      </section>
+    </main>
+
+    <div class="modal hidden" id="version-modal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <span id="version-modal-title">archived version</span>
+          <button class="btn btn-ghost" type="button" id="version-modal-close">✕</button>
+        </div>
+        <iframe id="version-modal-frame" sandbox="allow-scripts" title="archived version preview"></iframe>
+      </div>
+    </div>
+    <div class="wallet-panel hidden" id="wallet-panel">
+      <div class="wallet-panel-card">
+        <div class="wallet-panel-head">
+          <span class="wallet-panel-title">WALLET REQUEST</span>
+          <span class="wallet-panel-build" id="wallet-panel-build"></span>
+        </div>
+        <div class="wallet-panel-body" id="wallet-panel-body"></div>
+        <p class="wallet-panel-note">Decoded + simulated by the runtime before you saw this. Approving hands the request to your wallet — the agent never signs anything.</p>
+        <div class="wallet-panel-actions">
+          <button class="btn" type="button" id="wallet-panel-reject">reject</button>
+          <button class="btn btn-accent" type="button" id="wallet-panel-approve">approve</button>
+        </div>
+      </div>
+    </div>
+    <div class="toast hidden" id="toast"></div>
+
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

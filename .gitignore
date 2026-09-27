@@ -1,0 +1,15 @@
+node_modules/
+dist/
+data/
+.env
+*.log
+.vite/
+
+# Fetched third-party assets — regenerate with `npm run libs`
+libs/
+
+# Research scratch (may contain signed payloads) — keep out of VCS
+artifacts/
+
+# Static deploy staging (regenerated on demand) — keep out of VCS
+deploy/

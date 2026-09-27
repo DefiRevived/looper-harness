@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "looper": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npm", "run", "mcp"]
+    },
+    "helixa": {
+      "type": "http",
+      "url": "https://api.helixa.xyz/api/mcp"
+    }
+  }
+}
