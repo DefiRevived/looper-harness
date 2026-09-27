@@ -79,6 +79,15 @@
         <button class="btn btn-ghost" type="button" id="settings-open" title="settings">⚙</button>
         <span class="chip" id="mode-chip">loading…</span>
         <span class="chip chip-dim" id="chain-chip">base</span>
+        <div class="agent-switch">
+          <button class="btn btn-ghost" type="button" id="agent-switch" title="switch agent — each Looper keeps its own memory, threads and builds">agents ▾</button>
+          <div class="agent-menu hidden" id="agent-menu">
+            <div class="agent-menu-head">switch agent</div>
+            <p class="agent-menu-sub">each Looper keeps its own memory, threads, transcripts and builds.</p>
+            <div class="agent-menu-list" id="agent-menu-list"></div>
+            <p class="agent-menu-note">or enter another token id below → activate (ownership is verified).</p>
+          </div>
+        </div>
         <form class="token-picker" id="token-form">
           <label for="token-input">token</label>
           <input id="token-input" type="number" min="1" placeholder="id" />

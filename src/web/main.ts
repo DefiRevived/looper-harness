@@ -42,6 +42,9 @@ const modeChip = $<HTMLSpanElement>('mode-chip');
 const chainChip = $<HTMLSpanElement>('chain-chip');
 const tokenForm = $<HTMLFormElement>('token-form');
 const tokenInput = $<HTMLInputElement>('token-input');
+const agentSwitch = $<HTMLButtonElement>('agent-switch');
+const agentMenu = $<HTMLDivElement>('agent-menu');
+const agentMenuList = $<HTMLDivElement>('agent-menu-list');
 const activationEl = $<HTMLDivElement>('activation');
 const activationForm = $<HTMLFormElement>('activation-form');
 const activationInput = $<HTMLInputElement>('activation-input');
@@ -1755,7 +1758,11 @@ async function renderHistory(): Promise<void> {
     // history is best-effort
   }
   if (!chatLog.childElementCount) {
-    appendBubble('system', `give #${tokenId} a job — try: “triage a failure” / “harden this workflow” / “clean up this repo”`);
+    const name = currentAgent
+      ? (currentAgent.codex.name ?? currentAgent.identity.name ?? `Looper #${tokenId}`)
+      : `Looper #${tokenId}`;
+    const ideas = agentSuggestions(currentAgent).map((s) => `“${s}”`).join(' / ');
+    appendBubble('system', `give ${name} a job — try: ${ideas}`);
   }
 }
 
@@ -1920,29 +1927,140 @@ async function runOwnershipCheck(token: number): Promise<void> {
   activationError.textContent = '';
 }
 
+/* ---------- agent switcher (each Looper keeps its own everything) --------- */
+
+interface SavedAgent {
+  id: number;
+  name: string;
+  klass: string;
+  at: number;
+}
+
+const AGENTS_KEY = 'looper-harness.agents';
+let currentAgent: ApiLooper | null = null;
+
+function loadSavedAgents(): SavedAgent[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AGENTS_KEY) ?? '[]') as SavedAgent[];
+    return Array.isArray(parsed) ? parsed.filter((a) => Number.isInteger(a?.id) && a.id > 0).slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberAgent(data: ApiLooper): void {
+  const id = data.identity.tokenId;
+  const entry: SavedAgent = {
+    id,
+    name: data.codex.name ?? data.identity.name ?? `Looper #${id}`,
+    klass: data.codex.agent_class ?? '',
+    at: Date.now(),
+  };
+  const rest = loadSavedAgents().filter((a) => a.id !== id);
+  localStorage.setItem(AGENTS_KEY, JSON.stringify([entry, ...rest].slice(0, 8)));
+}
+
+function renderAgentMenu(): void {
+  const agents = loadSavedAgents();
+  agentMenuList.innerHTML = '';
+  if (!agents.length) {
+    const empty = document.createElement('div');
+    empty.className = 'agent-menu-empty';
+    empty.textContent = 'no agents yet — activate one below.';
+    agentMenuList.appendChild(empty);
+    return;
+  }
+  for (const item of agents) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `agent-item${item.id === tokenId ? ' current' : ''}`;
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = item.id === tokenId ? `${item.name} · current` : item.name;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `#${item.id}${item.klass ? ` · ${item.klass}` : ''}`;
+    button.append(who, meta);
+    button.addEventListener('click', () => {
+      hideAgentMenu();
+      if (item.id !== tokenId) void activate(item.id);
+    });
+    agentMenuList.appendChild(button);
+  }
+}
+
+function showAgentMenu(): void {
+  renderAgentMenu();
+  agentMenu.classList.remove('hidden');
+}
+
+function hideAgentMenu(): void {
+  agentMenu.classList.add('hidden');
+}
+
+/** Empty-thread ideas matched to the agent's own class and specialization. */
+function agentSuggestions(data: ApiLooper | null): string[] {
+  const parts = [
+    data?.codex.agent_class,
+    data?.codex.secondary_class,
+    data?.codex.specialization,
+    ...(data?.codex.personality?.values ?? []),
+    ...(data?.codex.personality?.quirks ?? []),
+  ];
+  const hay = parts.filter(Boolean).join(' ').toLowerCase();
+  if (/build|engineer|architect|maker|construct/.test(hay)) {
+    return ['build me a small web app', 'scaffold a project from an idea', 'improve one of my builds'];
+  }
+  if (/fix|merc|repair|debug|troubleshoot/.test(hay)) {
+    return ['triage a failure', 'harden this workflow', 'clean up a repo'];
+  }
+  if (/art|design|creat|muse|illustrat/.test(hay)) {
+    return ['design a poster', 'animate a small scene', 'sketch a visual concept'];
+  }
+  if (/trade|market|merchant|broker|financ|wallet/.test(hay)) {
+    return ['check my wallet', 'research a token', 'explain a contract'];
+  }
+  if (/oracl|analy|scholar|research|data|insight/.test(hay)) {
+    return ['research a topic for me', 'explain this contract', 'dig into an event'];
+  }
+  if (/guard|sentinel|protect|watch|secur|audit/.test(hay)) {
+    return ['audit one of my builds', 'set up a monitoring idea', 'harden this workflow'];
+  }
+  if (/explor|pioneer|scout|guide|map/.test(hay)) {
+    return ['research a new area', 'find something on-chain', 'plan an approach'];
+  }
+  return ['give it a job — say what done looks like', 'ask what it can do', 'start with something small'];
+}
+
 async function activate(token: number): Promise<void> {
   const firstBoot = !activationEl.classList.contains('hidden');
+  const previous = { tokenId, sessionKey };
   tokenId = token;
   sessionKey = `web:${tokenId}`;
 
   try {
     const data = await fetchBundle(tokenId);
+    currentAgent = data;
     localStorage.setItem('looper-harness.token', String(tokenId));
     tokenInput.value = String(tokenId);
+    rememberAgent(data);
     renderAgent(data);
     renderMode(data);
     renderImage();
     renderHelixaCred(data.helixaCred ?? null);
     activationEl.classList.add('hidden');
   } catch (err) {
-    if (firstBoot) {
-      showActivation(`couldn't activate Looper #${tokenId} — ${(err as Error).message}`);
+    // A failed activation/switch must never strand the console on the wrong
+    // agent — restore the previous selection and say what happened.
+    tokenId = previous.tokenId;
+    sessionKey = previous.sessionKey;
+    if (firstBoot || !currentAgent) {
+      showActivation(`couldn't activate Looper #${token} — ${(err as Error).message}`);
       return;
     }
-    agentName.textContent = `Looper #${tokenId}`;
-    provenanceEl.textContent = `activation failed: ${(err as Error).message}`;
-    modeChip.textContent = 'offline';
-    modeChip.className = 'chip chip-error';
+    tokenInput.value = String(tokenId);
+    toast(`couldn't switch to Looper #${token} — ${(err as Error).message}`, 'error');
+    return;
   }
 
   await renderHistory();
@@ -2059,6 +2177,20 @@ tokenForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const next = Number(tokenInput.value);
   if (Number.isInteger(next) && next > 0) void activate(next);
+});
+
+agentSwitch.addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (agentMenu.classList.contains('hidden')) showAgentMenu();
+  else hideAgentMenu();
+});
+document.addEventListener('click', (event) => {
+  if (!agentMenu.classList.contains('hidden') && !(event.target instanceof Node && agentMenu.contains(event.target))) {
+    hideAgentMenu();
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') hideAgentMenu();
 });
 
 activationForm.addEventListener('submit', (event) => {

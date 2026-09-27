@@ -8,7 +8,8 @@ apps and dapps in a real workspace, remember and lock its work, and package resu
 One web console plus Telegram/Discord adapters and an MCP server, all sharing the same brain and memory.
 The runtime holds no keys; everything is local-first with opt-in gates (see Security posture).
 
-> Reference token: #452 (Mercenary / Fixer). The harness works for any of the 7,777 Loopers.
+> Works with any of the 7,777 Loopers on Base — activate yours in the console and the runtime embodies
+> that agent.
 
 ## Requirements
 
@@ -29,7 +30,7 @@ npm run dev         # → http://127.0.0.1:4520
 `.env` essentials:
 
 ```text
-LOOPER_TOKEN_ID=452             # REQUIRED — the token this runtime embodies (1–7777)
+LOOPER_TOKEN_ID=               # optional — pin one token for headless bots/mcp; the console activates any Looper you own
 DEEPSEEK_API_KEY=               # optional here — or enter one in setup; stored locally
 DEEPSEEK_MODEL=deepseek-flash   # valid names: deepseek-flash, deepseek-v4-pro
 BASE_RPC_URL=https://mainnet.base.org
@@ -39,6 +40,8 @@ LOOPER_BUILDS_DIR=              # optional — where builds/projects go (default
 
 If `LOOPER_TOKEN_ID` is empty, the console asks for the token id on first boot — enter a Looper you own,
 sign the gas-free ownership message, and the runtime loads its identity, codex and art on the spot.
+Switch agents anytime from the top bar's **agents** menu — each Looper keeps its own memory, threads,
+transcripts and builds.
 
 `.env` is gitignored — keep keys there, never in code.
 

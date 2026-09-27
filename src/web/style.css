@@ -1478,6 +1478,90 @@ input:focus {
   margin-right: auto;
 }
 
+/* ---------- agent switcher ---------- */
+
+.agent-switch {
+  position: relative;
+}
+
+.agent-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(320px, 84vw);
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 10px;
+  z-index: 140;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.agent-menu-head {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--blue);
+  text-transform: uppercase;
+}
+
+.agent-menu-sub {
+  color: var(--dim);
+  font-size: 10.5px;
+  margin: 3px 0 8px;
+  line-height: 1.5;
+}
+
+.agent-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.agent-item:hover {
+  background: var(--accent-soft);
+}
+
+.agent-item.current {
+  border-color: var(--border-2);
+  background: var(--panel-2);
+}
+
+.agent-item .who {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-item .meta {
+  color: var(--dim);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+.agent-menu-empty {
+  color: var(--dim);
+  font-size: 11px;
+  padding: 4px 2px 8px;
+}
+
+.agent-menu-note {
+  color: var(--dim);
+  font-size: 10.5px;
+  margin: 8px 0 0;
+}
+
 .toast {
   position: fixed;
   right: 18px;
