@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Router, type Request, type Response } from 'express';
@@ -10,7 +11,7 @@ import { fetchArweave } from '../core/arweave.js';
 import { resolveLooperImages } from '../core/looperAssets.js';
 import { isProjectFolder } from '../core/projects.js';
 import { streamAgentReply, streamAgentReplyWithTools } from '../core/brain.js';
-import { isBuildId, listArtifacts, parseBuildThread, revertBuild, sessionDirName } from '../core/tools.js';
+import { buildFolderFor, isBuildId, listArtifacts, parseBuildThread, revertBuild, sessionDirName } from '../core/tools.js';
 import { distillMessages, labelFor } from '../core/episodes.js';
 import { listVersions, readVersionEntry, versionSnapshotDir } from '../core/versions.js';
 import { allLocks, forgetEntry, listMemoryEntries, lockRemove, taskComplete, taskList } from '../core/memory.js';
@@ -330,6 +331,62 @@ apiRouter.post('/fs/mkdir', (req, res) => {
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }
+});
+
+// --- reveal a build's folder in the OS file manager ----------------------------
+// The browser cannot open OS folders; the local server can. Build-scoped by
+// design: the path is resolved server-side from sessionKey + build id (never
+// taken from the client), so only folders under the builds root can open.
+
+/** Best-effort: open a folder in Explorer / Finder / xdg-open. */
+function openFolderInFileManager(folder: string): boolean {
+  try {
+    if (process.platform === 'win32') {
+      const explorer = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'explorer.exe');
+      const child = spawn(explorer, [folder], { detached: true, stdio: 'ignore' });
+      child.on('error', () => undefined);
+      child.unref();
+      return true;
+    }
+    const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+    const child = spawn(cmd, [folder], { detached: true, stdio: 'ignore' });
+    child.on('error', () => undefined);
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+apiRouter.get('/build-folder', (req, res) => {
+  const sessionKey = typeof req.query.sessionKey === 'string' ? req.query.sessionKey : '';
+  const buildId = typeof req.query.buildId === 'string' ? req.query.buildId : '';
+  const folder = sessionKey && buildId ? buildFolderFor(sessionKey, buildId) : null;
+  if (!folder) {
+    res.status(404).json({ error: 'no such build — nothing to show.' });
+    return;
+  }
+  res.json({ path: folder });
+});
+
+apiRouter.post('/reveal-build', (req, res) => {
+  const body = (req.body ?? {}) as { sessionKey?: unknown; buildId?: unknown };
+  const sessionKey = typeof body.sessionKey === 'string' ? body.sessionKey.trim() : '';
+  const buildId = typeof body.buildId === 'string' ? body.buildId.trim() : '';
+  if (!sessionKey || !buildId) {
+    res.status(400).json({ error: 'sessionKey and buildId are required' });
+    return;
+  }
+  const folder = buildFolderFor(sessionKey, buildId);
+  if (!folder) {
+    res.status(404).json({ error: 'no such build — nothing to open.' });
+    return;
+  }
+  if (!openFolderInFileManager(folder)) {
+    res.status(500).json({ error: 'could not start the file manager.' });
+    return;
+  }
+  res.json({ ok: true, path: folder });
 });
 
 // Wallet reads hit an RPC and the vitals panel polls — cache per address briefly.

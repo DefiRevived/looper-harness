@@ -1883,3 +1883,31 @@ input:focus {
   font-size: 11px;
   color: var(--dim);
 }
+
+/* --- build "on disk" section (reveal the build's folder) --- */
+.build-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.build-folder-k {
+  flex: 0 0 auto;
+}
+
+.build-folder-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--dim);
+}

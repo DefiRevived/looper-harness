@@ -1295,6 +1295,19 @@ async function loadPreview(frame: HTMLIFrameElement, artifact: ArtifactInfo): Pr
   }
 }
 
+/** Open a build's folder in the OS file manager (server-side; the browser cannot). */
+async function openBuildFolder(sessionKeyForBuild: string, artifact: ArtifactInfo): Promise<void> {
+  try {
+    const r = await postJson<{ ok: boolean; path?: string }>('/api/reveal-build', {
+      sessionKey: sessionKeyForBuild,
+      buildId: artifact.id,
+    });
+    toast(`opened ${r.path ?? 'build folder'}`);
+  } catch (err) {
+    toast((err as Error).message, 'error');
+  }
+}
+
 function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): void {
   const existing = buildCards.get(artifact.id);
   if (existing) {
@@ -1377,7 +1390,44 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
       // ignore — the build stays listed if the delete failed
     }
   });
-  head.append(toggle, title, kind, spacer, history, open, copy, del);
+  const folder = document.createElement('button');
+  folder.className = 'btn btn-ghost';
+  folder.type = 'button';
+  folder.textContent = '📁';
+  folder.title = 'open this build’s folder on disk';
+  folder.addEventListener('click', () => void openBuildFolder(sessionKey, artifact));
+  head.append(toggle, title, kind, spacer, history, open, copy, folder, del);
+
+  // "on disk" section — the build's REAL folder, one click away.
+  const folderRow = document.createElement('div');
+  folderRow.className = 'build-folder-row';
+  const folderK = document.createElement('span');
+  folderK.className = 'build-folder-k';
+  folderK.textContent = 'on disk:';
+  const folderPath = document.createElement('code');
+  folderPath.className = 'build-folder-path';
+  folderPath.textContent = '…';
+  const folderOpen = document.createElement('button');
+  folderOpen.className = 'btn btn-ghost';
+  folderOpen.type = 'button';
+  folderOpen.textContent = 'open folder';
+  const loadFolderPath = async (): Promise<void> => {
+    if (folderPath.textContent !== '…') return;
+    try {
+      const r = await getJson<{ path: string }>(
+        `/api/build-folder?sessionKey=${encodeURIComponent(sessionKey)}&buildId=${encodeURIComponent(artifact.id)}`,
+      );
+      folderPath.textContent = r.path;
+      folderPath.title = r.path;
+    } catch {
+      folderPath.textContent = '(unavailable)';
+    }
+  };
+  folderOpen.addEventListener('click', async () => {
+    await openBuildFolder(sessionKey, artifact);
+    await loadFolderPath();
+  });
+  folderRow.append(folderK, folderPath, folderOpen);
 
   const versions = document.createElement('div');
   versions.className = 'build-versions hidden';
@@ -1493,6 +1543,7 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
   let buildAbort: AbortController | null = null;
 
   const ensureHistory = async (): Promise<void> => {
+    void loadFolderPath();
     if (historyLoaded) return;
     historyLoaded = true;
     try {
@@ -1639,7 +1690,7 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
     })();
   });
 
-  card.append(head, versions, wrap, chat);
+  card.append(head, folderRow, versions, wrap, chat);
   artifactsList.prepend(card);
 
   if (opts.expand) void ensureHistory();
