@@ -11,7 +11,7 @@ import { lockAdd, lockRemove, locksFor, memoryRecall, memoryRemember, purgeBuild
 import { applyVersionTree, archiveVersion, listVersions, purgeVersions, readVersionTree } from './versions.js';
 import { looperImageCount } from './looperAssets.js';
 import { libManifest } from './libs.js';
-import { allowlistSummary, checkPackage, isProjectFolder, jobStatusText, PROJECT_ALLOWLIST, projectBuild, projectDistInfo, projectInstall } from './projects.js';
+import { allowlistSummary, checkPackage, isProjectFolder, jobStatus, jobStatusText, PROJECT_ALLOWLIST, projectBuild, projectDistInfo, projectInstall } from './projects.js';
 import { searchContracts, webFetch, webSearch } from './research.js';
 import { diffTrees } from './diff.js';
 import { contractEvidence, ownerOfCheck } from './evidence.js';
@@ -2584,20 +2584,33 @@ const RUN_MODULE_TOOL: ToolDefinition = {
 };
 
 /** job_status — progress + output tail for background installs/builds. */
-function jobStatusTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+async function jobStatusTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const deny = webOnly('job_status', ctx);
   if (deny) return deny;
   const id = typeof args.job_id === 'string' && args.job_id.trim() ? args.job_id.trim() : undefined;
-  return { modelText: jobStatusText(id) };
+  // Waiting beats polling: the agent used to fire a background job, poll once at
+  // ~13s, learn nothing, and end its turn with the toolchain half-finished.
+  const waitS = Math.min(180, Math.max(0, Number(args.wait_s) || 0));
+  const deadline = Date.now() + waitS * 1000;
+  while (waitS > 0 && Date.now() < deadline) {
+    const { job } = jobStatus(id);
+    if (!job || job.state === 'done') break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  const waited = waitS > 0 ? `\n(waited up to ${waitS}s for the job to finish)` : '';
+  return { modelText: `${jobStatusText(id)}${waited}` };
 }
 
 const JOB_STATUS_TOOL: ToolDefinition = {
   name: 'job_status',
   description:
-    'Check toolchain jobs started with project_install / project_build (background:true): state, elapsed, queue position, live output tail, and the final result. Prefer background jobs + polling over blocking calls when you have other work in the same turn. Without job_id you get the latest job plus active/recent lists. Jobs are in-memory (a server restart clears them).',
+    'Check toolchain jobs started with project_install / project_build (background:true): state, elapsed, queue position, live output tail, and the final result. Pass wait_s to BLOCK until the job finishes (max 180) instead of polling across turns — that is the reliable way to see an install/build through. Without job_id you get the latest job plus active/recent lists. Jobs are in-memory (a server restart clears them).',
   parameters: {
     type: 'object',
-    properties: { job_id: { type: 'string', description: 'Job id from the project_install / project_build response.' } },
+    properties: {
+      job_id: { type: 'string', description: 'Job id from the project_install / project_build response.' },
+      wait_s: { type: 'integer', description: 'Wait up to this many seconds for the job to finish before reporting (max 180).' },
+    },
     required: [],
   },
   execute: jobStatusTool,

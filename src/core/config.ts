@@ -39,6 +39,11 @@ export const config = {
   // platform, the tool refuses by default (fail closed). Set true to allow
   // unguarded execution anyway — the operator accepts the risk.
   runUnsandboxed: env('LOOPER_RUN_UNSANDBOXED', 'false') === 'true',
+  // Previewing a REAL npm project whose dist/ was never built (the agent ran
+  // out of turn, or simply forgot) used to dead-end on a JSON error. With this
+  // on, the preview itself finishes the job it needs: it starts the build and
+  // reloads into the site. Set LOOPER_PREVIEW_AUTOBUILD=false to disable.
+  autoBuildPreview: env('LOOPER_PREVIEW_AUTOBUILD', 'true') !== 'false',
   maxMessageChars: Number(env('LOOPER_MAX_MESSAGE_CHARS', '4000')),
   dream: {
     enabled: env('DREAM_ENABLED', 'true') !== 'false',

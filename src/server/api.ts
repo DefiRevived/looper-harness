@@ -9,7 +9,7 @@ import { readHelixaCred } from '../core/cred.js';
 import { llmMode } from '../core/llm.js';
 import { fetchArweave } from '../core/arweave.js';
 import { resolveLooperImages } from '../core/looperAssets.js';
-import { isProjectFolder } from '../core/projects.js';
+import { activeJobFor, buildWarnings, isProjectFolder, lastJobFor, projectBuild, projectDistInfo, projectInstall } from '../core/projects.js';
 import { streamAgentReply, streamAgentReplyWithTools } from '../core/brain.js';
 import { buildFolderFor, isBuildId, listArtifacts, parseBuildThread, revertBuild, sessionDirName } from '../core/tools.js';
 import { distillMessages, labelFor } from '../core/episodes.js';
@@ -161,22 +161,132 @@ function splatToRel(raw: unknown): string {
   return typeof raw === 'string' ? raw : '';
 }
 
+// --- preview self-heal: build an unbuilt project instead of erroring ---------
+// The operator asked to SEE the build. If a REAL npm project has no dist/ yet,
+// the honest answer is not an error page — it is to finish the missing step and
+// show the site. Auto-builds are deduped (one per folder), rate-limited, and
+// paused after repeated failures so a broken project cannot spin forever.
+
+const AUTO_BUILD_COOLDOWN_MS = 20_000;
+const AUTO_BUILD_MAX_FAILURES = 3;
+const autoBuildAttempts = new Map<string, { at: number; failures: number }>();
+
+const esc = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+
+function noteAutoBuildOutcome(key: string, ok: boolean): void {
+  if (ok) {
+    autoBuildAttempts.delete(key);
+    return;
+  }
+  const rec = autoBuildAttempts.get(key) ?? { at: 0, failures: 0 };
+  autoBuildAttempts.set(key, { at: rec.at, failures: rec.failures + 1 });
+}
+
+function maybeAutoBuild(folder: string, key: string): void {
+  if (!config.autoBuildPreview) return;
+  if (activeJobFor(folder)) return; // something is already working on it
+  const rec = autoBuildAttempts.get(key);
+  if (rec) {
+    if (rec.failures >= AUTO_BUILD_MAX_FAILURES) return; // paused: needs a source fix
+    if (Date.now() - rec.at < AUTO_BUILD_COOLDOWN_MS) return; // just tried
+  }
+  autoBuildAttempts.set(key, { at: Date.now(), failures: rec?.failures ?? 0 });
+  // Detached on purpose: the job registry tracks it (job_status + this page).
+  void (async () => {
+    try {
+      if (!fs.existsSync(path.join(folder, 'node_modules'))) {
+        const installed = await projectInstall(folder);
+        if (!installed.ok) {
+          noteAutoBuildOutcome(key, false);
+          return;
+        }
+      }
+      const built = await projectBuild(folder);
+      noteAutoBuildOutcome(key, built.ok);
+    } catch {
+      noteAutoBuildOutcome(key, false);
+    }
+  })();
+}
+
+/** Server-rendered status page for a project that is still being built. */
+function projectBuildPage(folder: string, id: string, key: string): string {
+  const deps = fs.existsSync(path.join(folder, 'node_modules'));
+  const active = activeJobFor(folder);
+  const last = lastJobFor(folder);
+  const rec = autoBuildAttempts.get(key);
+  const paused = (rec?.failures ?? 0) >= AUTO_BUILD_MAX_FAILURES;
+  const elapsed = (j: { startedAt?: number; endedAt?: number; createdAt: number }): string =>
+    `${Math.max(0, Math.round(((j.endedAt ?? Date.now()) - (j.startedAt ?? j.createdAt)) / 1000))}s`;
+
+  const stateLine = active
+    ? `<li>${esc(active.kind)} job <code>${esc(active.id)}</code> — <b>${esc(active.state)}</b> · ${esc(elapsed(active))}${
+        active.queueAhead ? ` · ${active.queueAhead} ahead in queue` : ''
+      }</li>`
+    : last && !last.ok
+      ? `<li>last ${esc(last.kind)} job <code>${esc(last.id)}</code> — <b class="bad">FAILED</b> · ${esc(elapsed(last))}</li>`
+      : `<li>starting the build…</li>`;
+
+  const tail = (!active && last && !last.ok && last.tail.trim()) || (active && active.tail.trim()) || '';
+  const failureNote = last && !last.ok && last.message ? `<p class="bad">${esc(last.message.split('\n')[0])}</p>` : '';
+  const pausedNote = paused
+    ? '<p class="bad">Auto-build paused after repeated failures — the source needs a fix first. Ask the agent to fix it and run <code>project_build</code>, then reload.</p>'
+    : '';
+  const disabledNote = config.autoBuildPreview
+    ? ''
+    : '<p>Auto-build is OFF (<code>LOOPER_PREVIEW_AUTOBUILD=false</code>). Run <code>project_install</code> then <code>project_build</code>, or ask the agent to.</p>';
+  const refresh = (active || (config.autoBuildPreview && !paused) || (!last && !active)) ? '<meta http-equiv="refresh" content="3">' : '';
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${refresh}
+<title>building — ${esc(id)}</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 2rem 1.25rem; background: #070b14; color: #cfe3f5; font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.05rem; letter-spacing: .08em; text-transform: uppercase; color: #6ef7c0; margin: 0 0 .25rem; }
+  .sub { color: #5f7186; margin: 0 0 1.25rem; }
+  ul { padding-left: 1.1rem; } li { margin: .2rem 0; }
+  code { color: #ffcf3a; }
+  b { color: #7fd4ff; } b.bad, .bad { color: #ff5d7a; }
+  pre { background: #0b1220; border: 1px solid #1b2a3d; border-radius: 6px; padding: .75rem; overflow: auto; max-height: 320px; white-space: pre-wrap; }
+  .ok { color: #6ef7c0; }
+</style></head>
+<body><main>
+<h1>Building this project</h1>
+<p class="sub">${esc(id)} — a REAL npm project: the preview serves its built <code>dist/</code>, which did not exist yet. This page finishes the job and reloads itself into the site.</p>
+<ul>
+  <li>dependencies: ${deps ? '<span class="ok">installed ✓</span>' : 'missing — installing first'}</li>
+  ${stateLine}
+</ul>
+${failureNote}${pausedNote}${disabledNote}
+${tail ? `<pre>${esc(tail.trim().split('\n').slice(-18).join('\n'))}</pre>` : ''}
+</main></body></html>`;
+}
+
 apiRouter.get('/artifact/:session/:id{/*rest}', async (req, res) => {
   const folder = artifactPath(String(req.params.session ?? ''), String(req.params.id ?? ''));
   if (!folder) {
     res.status(400).json({ error: 'invalid artifact path' });
     return;
   }
-  const file = resolveBuildPath(folder, splatToRel((req.params as Record<string, unknown>).rest));
+  const rel = splatToRel((req.params as Record<string, unknown>).rest);
+  const file = resolveBuildPath(folder, rel);
   if (!file) {
-    // A REAL npm project serves its BUILT dist/ — an unbuilt project is not a
-    // missing file, and saying which it is is the difference between a fixable
-    // error and a mystery. Say exactly what has to run.
-    if (isProjectFolder(folder) && !fs.existsSync(path.join(folder, 'dist'))) {
-      res.status(404).json({
-        error: 'project not built yet',
-        detail: 'This is a REAL npm project: the preview serves its built dist/ folder, which does not exist yet. Run project_install, then project_build (or ask the agent to), then reload.',
-      });
+    // A REAL npm project serves its BUILT dist/. An entry request for one that
+    // has not been built is not an error the operator should have to interpret:
+    // the harness finishes the missing step and shows the site.
+    if (isProjectFolder(folder) && !projectDistInfo(folder)) {
+      if (!rel) {
+        const key = `${req.params.session}/${req.params.id}`;
+        maybeAutoBuild(folder, key);
+        res.type('html').send(projectBuildPage(folder, String(req.params.id ?? ''), key));
+        return;
+      }
+      res.status(404).json({ error: 'project not built yet', detail: 'dist/ does not exist yet — open the build entry to trigger a build.' });
       return;
     }
     res.status(404).json({ error: 'artifact file not found' });

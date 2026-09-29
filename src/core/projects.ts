@@ -390,6 +390,38 @@ export function projectDistInfo(folder: string): { files: Array<{ rel: string; b
   return { files, total: files.reduce((n, f) => n + f.bytes, 0) };
 }
 
+/** The most recent ACTIVE job for a folder — lets the preview dedupe auto-builds. */
+export function activeJobFor(folder: string): JobSnapshot | null {
+  const active = [...jobs.values()]
+    .filter((j) => j.folder === folder && j.state !== 'done')
+    .sort((a, b) => b.createdAt - a.createdAt);
+  return active.length ? snapshotOf(active[0]) : null;
+}
+
+/** The most recent FINISHED job for a folder — the preview page reports its outcome. */
+export function lastJobFor(folder: string): JobSnapshot | null {
+  const done = [...jobs.values()]
+    .filter((j) => j.folder === folder && j.state === 'done')
+    .sort((a, b) => b.createdAt - a.createdAt);
+  return done.length ? snapshotOf(done[0]) : null;
+}
+
+/**
+ * Warning lines from build output. A build can succeed while still shipping a
+ * real defect (an invalid CSS selector that browsers silently drop, a dangling
+ * import) — those only ever showed up in the raw log, which the agent never
+ * read. Surface them alongside the success.
+ */
+export function buildWarnings(output: string): string[] {
+  const seen = new Set<string>();
+  for (const line of output.split('\n')) {
+    const t = line.trim();
+    if (!t || !/\[WARNING\]|^\(!\)|warning:/i.test(t)) continue;
+    seen.add(t.slice(0, 160));
+  }
+  return [...seen].slice(0, 6);
+}
+
 /** project_install — validate deps against the allowlist, then npm install them. */
 export async function projectInstall(
   folder: string,
@@ -453,10 +485,14 @@ export async function projectBuild(
     const kb = (n: number): string => (n < 10 * 1024 ? `${n} B` : `${(n / 1024).toFixed(1)}KB`);
     const lines = dist.files.slice(0, 12).map((f) => `  ${f.rel} ${kb(f.bytes)}`);
     if (dist.files.length > 12) lines.push(`  … +${dist.files.length - 12} more`);
+    const warnings = buildWarnings(res.output);
     return {
       ok: true,
       message:
         `Built dist/ (${dist.files.length} files, ${kb(dist.total)}) — this is the site the preview, verify_render and hosting use:\n${lines.join('\n')}\n` +
+        (warnings.length
+          ? `⚠ build warnings — the site built, but these are usually REAL defects, not noise (fix them, then rebuild):\n${warnings.map((w) => `  ${w}`).join('\n')}\n`
+          : '') +
         'Run check_build (static) and verify_render (real render) on it now.',
     };
   });
