@@ -8,7 +8,8 @@ import { maybeSummarize } from './episodes.js';
 import { logActivity } from './activity.js';
 import { collectReceipts, receiptsLine, type Receipts } from './receipts.js';
 import { libSummary } from './libs.js';
-import { allowlistSummary } from './projects.js';
+import { allowlistSummary, verifyBuilds } from './projects.js';
+import { buildOutcomeLine, failingBuilds, lastBuildOutcome } from './buildState.js';
 import { listVersions } from './versions.js';
 import * as store from './store.js';
 
@@ -158,6 +159,35 @@ export type AgentEvent =
 
 const MAX_TOOL_ROUNDS = 8;
 
+/**
+ * Tools whose success means "this project's source changed". The turn-close
+ * gate uses this to decide what has to be built before the turn may end.
+ */
+const PROJECT_WRITE_TOOLS = new Set(['write_build_file', 'delete_build_file', 'edit_build', 'update_build']);
+
+/**
+ * Measured build health for this session, injected into the turn.
+ *
+ * Two failures this catches that nothing else did: one the PREVIEW hit while
+ * the agent was idle (the operator saw a broken page; the model saw nothing),
+ * and one from the agent's own earlier turn. Either way the model starts the
+ * turn already knowing what is broken instead of being told twice.
+ */
+function buildStateNote(sessionKey: string, build: { parentKey: string; buildId: string } | null): string {
+  if (build) {
+    const folder = buildFolderFor(build.parentKey, build.buildId);
+    const line = folder ? buildOutcomeLine(folder, 'this build') : null;
+    return line ? `BUILD STATE (measured by the harness, not claimed):\n${line}` : '';
+  }
+  const failing = failingBuilds(sessionDirName(sessionKey));
+  if (!failing.length) return '';
+  return (
+    'BUILD STATE (measured by the harness, not claimed) — projects of this console whose last build FAILED:\n' +
+    `${failing.map((f) => f.line).join('\n')}\n` +
+    'Fix the errors and run project_build, or say plainly that it does not build.'
+  );
+}
+
 /** Build id this call targets (explicit arg or the thread's build) — activity ledger key. */
 function activityRefFor(call: ToolCall, ctx: ToolContext): string | undefined {
   try {
@@ -261,11 +291,19 @@ export async function* streamAgentReplyWithTools(
   const build = parseBuildThread(sessionKey);
   const ctx: ToolContext = { sessionKey, surface, tokenId, buildId: build?.buildId };
   const specs = toolSpecsForSurface(surface, { buildThread: build !== null });
-  const extraContext = build ? await buildThreadContext(tokenId, build.parentKey, build.buildId, readBuildSource(build.parentKey, build.buildId)) : undefined;
+  const stateNote = buildStateNote(sessionKey, build);
+  const extraContext = build
+    ? [await buildThreadContext(tokenId, build.parentKey, build.buildId, readBuildSource(build.parentKey, build.buildId)), stateNote]
+        .filter(Boolean)
+        .join('\n\n') || undefined
+    : stateNote || undefined;
   const messages = await prepareTurn(tokenId, sessionKey, userText, undefined, extraContext);
   let full = '';
   let stopped = false;
   let roundsExhausted = false;
+  // Projects this turn touched, and whether the gate already ran (once per turn).
+  const dirtyFolders = new Map<string, number>();
+  let gateDone = false;
 
   try {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -284,7 +322,64 @@ export async function* streamAgentReplyWithTools(
           pendingCalls = step.toolCalls;
         }
       }
-      if (pendingCalls.length === 0) break;
+      if (pendingCalls.length === 0) {
+        // Turn-close verification gate. The model believes it is finished; if it
+        // changed a REAL project this turn and nothing has built it since, build
+        // it NOW and hand back what the compiler said. An agent that never runs
+        // the build cannot know it broke something — and "it works" has to be a
+        // measurement, not an assumption.
+        if (!gateDone && surface === 'web' && !opts?.signal?.aborted) {
+          const unbuilt = [...dirtyFolders.entries()]
+            .filter(([folder, wroteAt]) => {
+              const last = lastBuildOutcome(folder);
+              return !last || last.at < wroteAt; // nothing built it since the last write
+            })
+            .map(([folder]) => folder);
+          if (unbuilt.length) {
+            gateDone = true;
+            const startedAt = Date.now();
+            yield {
+              type: 'tool',
+              name: 'verify build',
+              note: `${unbuilt.length} project${unbuilt.length === 1 ? '' : 's'} changed this turn — building before the turn ends`,
+            };
+            let report: { ok: boolean; verified: number; report: string } | null = null;
+            const work = verifyBuilds(unbuilt, 'gate');
+            for (;;) {
+              const settled = await Promise.race([work, sleepTick(5_000)]);
+              if (settled) {
+                report = settled;
+                break;
+              }
+              yield { type: 'tool_tick', name: 'verify build', ms: Date.now() - startedAt };
+            }
+            logActivity(sessionKey, 'verify_build', { ok: report.ok, ms: Date.now() - startedAt });
+            yield {
+              type: 'tool_done',
+              name: 'verify build',
+              ms: Date.now() - startedAt,
+              ok: report.ok,
+              note: report.ok ? 'builds ✓' : firstLine(report.report) || 'BUILD FAILED',
+            };
+            if (report.verified) {
+              messages.push({
+                role: 'user',
+                content:
+                  `(system note for this turn only — not from the operator: the harness just BUILT the project${unbuilt.length === 1 ? '' : 's'} you changed. Result:\n${report.report}\n` +
+                  (report.ok
+                    ? 'It builds — say that because it was just built. Rendering still needs verify_render; do not claim more than that.)'
+                    : 'Fix these errors now with edit_build / write_build_file, then run project_build again. If you cannot fix them, say plainly that it does not build and quote the error.)'),
+              });
+              // On the last allowed round there are no tool rounds left to fix
+              // anything in — force the tools-free closing round so the failure
+              // gets a spoken explanation instead of silence.
+              roundsExhausted = round === MAX_TOOL_ROUNDS - 1;
+              continue;
+            }
+          }
+        }
+        break;
+      }
       roundsExhausted = round === MAX_TOOL_ROUNDS - 1;
 
       messages.push({ role: 'assistant', content: roundText, tool_calls: pendingCalls });
@@ -312,7 +407,14 @@ export async function* streamAgentReplyWithTools(
           ok: callOk,
           note: firstLine(result.modelText),
         };
-        if (result.artifact) yield { type: 'artifact', artifact: result.artifact };
+        if (result.artifact) {
+          yield { type: 'artifact', artifact: result.artifact };
+          // "This project's source changed" — the gate's input.
+          if (PROJECT_WRITE_TOOLS.has(call.function.name)) {
+            const folder = buildFolderFor(build?.parentKey ?? sessionKey, result.artifact.id);
+            if (folder) dirtyFolders.set(folder, Date.now());
+          }
+        }
         if (result.deleted) yield { type: 'artifact-removed', id: result.deleted };
         if (result.decision) yield { type: 'decision', question: result.decision.question, options: result.decision.options };
         messages.push({ role: 'tool', tool_call_id: call.id, content: result.modelText });

@@ -202,7 +202,7 @@ function maybeAutoBuild(folder: string, key: string): void {
           return;
         }
       }
-      const built = await projectBuild(folder);
+      const built = await projectBuild(folder, { via: 'preview' });
       noteAutoBuildOutcome(key, built.ok);
     } catch {
       noteAutoBuildOutcome(key, false);

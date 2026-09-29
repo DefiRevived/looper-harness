@@ -21,6 +21,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { recordBuildOutcome } from './buildState.js';
 
 /**
  * Curated package allowlist. Names only — the agent picks sane majors.
@@ -390,6 +391,52 @@ export function projectDistInfo(folder: string): { files: Array<{ rel: string; b
   return { files, total: files.reduce((n, f) => n + f.bytes, 0) };
 }
 
+export interface VerifyReport {
+  ok: boolean;
+  /** How many project folders actually needed a build (classic builds are skipped). */
+  verified: number;
+  report: string;
+}
+
+/**
+ * Build the given project folders and report exactly what the compiler said.
+ *
+ * This is the turn-close gate: an agent that never runs the build cannot know
+ * it broke something. Called at the end of a turn for every project it touched,
+ * so the errors come back to the model (and, on success, so "it builds" is a
+ * measured fact instead of an assumption).
+ */
+export async function verifyBuilds(
+  folders: string[],
+  via: 'gate' | 'preview' = 'gate',
+): Promise<VerifyReport> {
+  const targets = [...new Set(folders)].filter((f) => isProjectFolder(f) && fs.existsSync(f));
+  if (!targets.length) return { ok: true, verified: 0, report: '' };
+
+  const lines: string[] = [];
+  let ok = true;
+  for (const folder of targets) {
+    const label = path.basename(folder);
+    if (!fs.existsSync(path.join(folder, 'node_modules'))) {
+      const installed = await projectInstall(folder);
+      if (!installed.ok) {
+        ok = false;
+        recordBuildOutcome(folder, { ok: false, at: Date.now(), detail: installed.message.slice(0, 1200), via });
+        lines.push(`- ${label}: dependencies could not be installed, so it cannot build yet:\n  ${installed.message.split('\n').slice(0, 6).join('\n  ')}`);
+        continue;
+      }
+    }
+    const built = await projectBuild(folder, { via });
+    if (!built.ok) {
+      ok = false;
+      lines.push(`- ${label}: BUILD FAILED — ${built.message.split('\n').slice(0, 14).join('\n  ')}`);
+    } else {
+      lines.push(`- ${label}: built ok ✓`);
+    }
+  }
+  return { ok, verified: targets.length, report: lines.join('\n') };
+}
+
 /** The most recent ACTIVE job for a folder — lets the preview dedupe auto-builds. */
 export function activeJobFor(folder: string): JobSnapshot | null {
   const active = [...jobs.values()]
@@ -459,42 +506,51 @@ export async function projectInstall(
 /** project_build — run the project's build (vite) with a relative base; dist/ is the site. */
 export async function projectBuild(
   folder: string,
-  opts: { background?: boolean } = {},
+  opts: { background?: boolean; via?: 'agent' | 'gate' | 'preview' } = {},
 ): Promise<{ ok: boolean; message: string; jobId?: string }> {
   const check = checkPackage(folder);
-  if (!check.ok) return { ok: false, message: `project_build rejected: ${check.problem}` };
+  if (!check.ok) {
+    recordBuildOutcome(folder, { ok: false, at: Date.now(), detail: check.problem ?? 'package.json failed validation', via: opts.via ?? 'agent' });
+    return { ok: false, message: `project_build rejected: ${check.problem}` };
+  }
   if (!fs.existsSync(path.join(folder, 'node_modules'))) {
+    recordBuildOutcome(folder, { ok: false, at: Date.now(), detail: 'node_modules/ missing — dependencies were never installed', via: opts.via ?? 'agent' });
     return { ok: false, message: 'project_build rejected: node_modules/ is missing — run project_install first.' };
   }
+
+  const via = opts.via ?? 'agent';
+  const outcome = (ok: boolean, message: string): { ok: boolean; message: string } => {
+    recordBuildOutcome(folder, { ok, at: Date.now(), detail: message.slice(0, 1200), via });
+    return { ok, message };
+  };
 
   const { result, job } = await enqueueJob('build', folder, opts.background === true, async (tail) => {
     const res = await runNpm(['run', 'build', '--', '--base', './'], folder, BUILD_TIMEOUT_MS, tail);
     if (res.timedOut) {
-      return { ok: false, message: `project_build timed out after ${BUILD_TIMEOUT_MS / 1000}s and was killed. Fix the build error (or simplify) and retry.` };
+      return outcome(false, `project_build timed out after ${BUILD_TIMEOUT_MS / 1000}s and was killed. Fix the build error (or simplify) and retry.`);
     }
     if (res.code !== 0) {
-      return { ok: false, message: `project_build failed (exit ${res.code}) — fix the source and run it again:\n${outputTail(res.output)}` };
+      return outcome(false, `project_build failed (exit ${res.code}) — fix the source and run it again:\n${outputTail(res.output)}`);
     }
     const dist = projectDistInfo(folder);
     if (!dist) {
-      return {
-        ok: false,
-        message: `project_build finished but produced no dist/index.html. Is the build script really a site build (e.g. "vite build")? Output:\n${outputTail(res.output, 12)}`,
-      };
+      return outcome(
+        false,
+        `project_build finished but produced no dist/index.html. Is the build script really a site build (e.g. "vite build")? Output:\n${outputTail(res.output, 12)}`,
+      );
     }
     const kb = (n: number): string => (n < 10 * 1024 ? `${n} B` : `${(n / 1024).toFixed(1)}KB`);
     const lines = dist.files.slice(0, 12).map((f) => `  ${f.rel} ${kb(f.bytes)}`);
     if (dist.files.length > 12) lines.push(`  … +${dist.files.length - 12} more`);
     const warnings = buildWarnings(res.output);
-    return {
-      ok: true,
-      message:
-        `Built dist/ (${dist.files.length} files, ${kb(dist.total)}) — this is the site the preview, verify_render and hosting use:\n${lines.join('\n')}\n` +
-        (warnings.length
-          ? `⚠ build warnings — the site built, but these are usually REAL defects, not noise (fix them, then rebuild):\n${warnings.map((w) => `  ${w}`).join('\n')}\n`
-          : '') +
-        'Run check_build (static) and verify_render (real render) on it now.',
-    };
+    const summary =
+      `Built dist/ (${dist.files.length} files, ${kb(dist.total)}) — this is the site the preview, verify_render and hosting use:\n${lines.join('\n')}\n` +
+      (warnings.length
+        ? `⚠ build warnings — the site built, but these are usually REAL defects, not noise (fix them, then rebuild):\n${warnings.map((w) => `  ${w}`).join('\n')}\n`
+        : '');
+    const out = outcome(true, `${summary}Run check_build (static) and verify_render (real render) on it now.`);
+    recordBuildOutcome(folder, { ok: true, at: Date.now(), detail: `${summary.slice(0, 1100)}`, via });
+    return out;
   });
   if (!result) {
     return {
