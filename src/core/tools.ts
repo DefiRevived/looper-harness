@@ -2958,13 +2958,15 @@ async function prepareDeployTool(args: Record<string, unknown>, ctx: ToolContext
   if (fs.existsSync(folder)) walk(folder);
   return {
     modelText: [
-      `DEPLOY PACK READY — "${titleFromFile(target.buildId)}" packed to deploy/${slug}/ (${files} files, ${sizeLabel(bytes)}).`,
+      `DEPLOY PACK READY — "${titleFromFile(target.buildId)}" packed to:`,
+      `  ${folder}`,
+      `(${files} files, ${sizeLabel(bytes)}) — a COPY for hosting. The LIVE build stays in its own folder (${target.folder}) — deploys never replace or move the build.`,
       '- Hosting is the OPERATOR\'s step (the agent cannot run deploy CLIs). Give them exactly this:',
       '```',
-      `cd deploy/${slug}`,
+      `cd "${folder}"`,
       'vercel deploy --prod --yes',
       '```',
-      '- Redeploys: repack first, then deploy from the SAME folder (the host project link lives there — never delete it).',
+      '- Redeploys: repack first (this tool), then deploy from the SAME folder every time — a deploy run from a different folder creates a SECOND host project (two URLs for one build). The pack is a snapshot; it does not auto-update after edits.',
       `- pack output tail:\n${tail}`,
     ].join('\n'),
   };
@@ -2973,7 +2975,7 @@ async function prepareDeployTool(args: Record<string, unknown>, ctx: ToolContext
 const PREPARE_DEPLOY_TOOL: ToolDefinition = {
   name: 'prepare_deploy',
   description:
-    'Pack a build into a self-contained deploy folder (placeholders resolved, embedded images extracted, /libs copied, wallet shim stripped) and get the exact hosting command for the operator. Use when the operator says ship/host/publish — this is the handoff receipt; the actual deploy is THEIR step. For npm projects the built dist/ is packed (run project_build first).',
+    'Pack a build into a self-contained deploy folder (placeholders resolved, embedded images extracted, /libs copied, wallet shim stripped) and get the exact hosting command for the operator. Creates a COPY under the harness deploy/ folder — NEVER the build itself; the live build folder is untouched, and the pack is a snapshot you must repack after every edit. Use when the operator says ship/host/publish — this is the handoff receipt; the actual deploy is THEIR step. For npm projects the built dist/ is packed (run project_build first).',
   parameters: {
     type: 'object',
     properties: { build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' } },

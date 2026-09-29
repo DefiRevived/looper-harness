@@ -231,7 +231,7 @@ async function buildThreadContext(tokenId: number, parentKey: string, buildId: s
     ...memoryBlock,
     `- Receipts (verified by activity): ${receiptsLine(receipts)}`,
     '- Never claim a verification that is missing or STALE in the Receipts line above — run the tool or state the gap; recollection is not evidence.',
-    `- Version history: ${archived} archived state${archived === 1 ? '' : 's'} (whole-folder snapshots of SOURCE files) — list_versions to inspect, revert_build to restore one; rerun project_build after a revert (dist/ is not versioned).`,
+    `- Version history: ${archived} archived state${archived === 1 ? '' : 's'} (whole-folder snapshots of SOURCE files) — list_versions to inspect, revert_build to restore one; rerun project_build after a revert (dist/ is not versioned). Archives and deploy packs are COPIES under the data dir / harness deploy folder — the LIVE build is this folder on disk; never edit the archives, and never describe them as where the build lives.`,
     "- Real artwork: embed {{looper-image:TOKEN_ID}} — the server swaps in the token's actual artwork at serve time. Never fake artwork otherwise.",
     `- Libraries: classic static builds may load the vendored local libraries under /libs/ (${libSummary()}) — call list_libs for the inventory and usage snippets. npm projects import their deps instead. Either way: no CDNs or other external scripts; fetch()/XHR/WebSockets stay banned.`,
     '- Project rules: link files with RELATIVE paths (href="css/style.css", src="js/app.js") — they resolve inside the build folder. The entry document is the single page served at the preview URL.',
