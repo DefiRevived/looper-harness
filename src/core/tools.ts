@@ -2967,6 +2967,7 @@ async function prepareDeployTool(args: Record<string, unknown>, ctx: ToolContext
       'vercel deploy --prod --yes',
       '```',
       '- Redeploys: repack first (this tool), then deploy from the SAME folder every time — a deploy run from a different folder creates a SECOND host project (two URLs for one build). The pack is a snapshot; it does not auto-update after edits.',
+      '- If the live site 404s its assets or shows raw {{looper-image:…}} text, the RAW build folder was deployed — redeploy from this pack folder instead (placeholders resolved and /libs exist only here).',
       `- pack output tail:\n${tail}`,
     ].join('\n'),
   };

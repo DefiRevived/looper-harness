@@ -175,5 +175,21 @@ for (const rel of fileList) {
 for (const a of assets.values()) console.log(`  ${a.file}  ${kb(a.bytes)}  (extracted from a data URI)`);
 for (const f of copiedLibs) console.log(`  libs/${f}  ${kb(fs.statSync(path.resolve('libs', f)).size)}`);
 if (missingLibs.length) console.log(`  ⚠ referenced but not vendored: ${missingLibs.join(', ')} — run \`npm run libs\` or fix the page`);
+// 6. fail loudly if any REAL placeholder survived — a hosted page cannot resolve
+//    {{looper-image:…}} at runtime, so a residual one ships as a broken image.
+const unresolved: string[] = [];
+for (const rel of written) {
+  if (!TEXT_EXT.has(path.extname(rel).slice(1).toLowerCase())) continue;
+  try {
+    const body = fs.readFileSync(path.join(outDir, rel), 'utf8');
+    const n = (body.match(/\{\{looper-image:\d+\}\}/g) ?? []).length;
+    if (n) unresolved.push(`${rel} (${n})`);
+  } catch {
+    // unreadable — not our problem here
+  }
+}
+if (unresolved.length) {
+  console.log(`  ⚠ UNRESOLVED placeholders survived the pack: ${unresolved.join(', ')} — those images will be broken on the host; repack (token id missing or fetch failed at pack time)`);
+}
 console.log(`\npacked ${buildId} → ${path.relative(process.cwd(), outDir)}\\ (${written.size} files)`);
 console.log(`\nhost it:\n  cd ${path.relative(process.cwd(), outDir)}\n  vercel deploy --prod --yes\n`);
