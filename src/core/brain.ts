@@ -1,11 +1,12 @@
 import { loadLooper, type LooperBundle } from './codex.js';
 import { buildSystemPrompt } from './persona.js';
 import { completeReply, streamReply, streamSteps, type ChatMessage, type ToolCall } from './llm.js';
-import { buildFileList, executeToolCall, parseBuildThread, readBuildSource, sessionDirName, toolSpecsForSurface, type Artifact, type ToolContext, type ToolResult, type ToolSurface } from './tools.js';
+import { buildFileList, buildFolderFor, executeToolCall, parseBuildThread, readBuildSource, sessionDirName, toolSpecsForSurface, type Artifact, type ToolContext, type ToolResult, type ToolSurface } from './tools.js';
 import { buildMemoryDigest, locksFor } from './memory.js';
 import { detectSecretRequest } from './security.js';
 import { maybeSummarize } from './episodes.js';
 import { logActivity } from './activity.js';
+import { collectReceipts, receiptsLine, type Receipts } from './receipts.js';
 import { libSummary } from './libs.js';
 import { allowlistSummary } from './projects.js';
 import { listVersions } from './versions.js';
@@ -150,9 +151,23 @@ export type AgentEvent =
   | { type: 'tool_tick'; name: string; ms: number }
   | { type: 'tool_done'; name: string; ms: number; ok: boolean; note?: string }
   | { type: 'artifact'; artifact: Artifact }
-  | { type: 'artifact-removed'; id: string };
+  | { type: 'artifact-removed'; id: string }
+  // The agent asked the OPERATOR a decision (request_decision) — the console
+  // renders a card; the answer arrives as the next user message.
+  | { type: 'decision'; question: string; options: string[] };
 
 const MAX_TOOL_ROUNDS = 8;
+
+/** Build id this call targets (explicit arg or the thread's build) — activity ledger key. */
+function activityRefFor(call: ToolCall, ctx: ToolContext): string | undefined {
+  try {
+    const args = JSON.parse(call.function.arguments || '{}') as { build_id?: unknown };
+    if (typeof args.build_id === 'string' && /^[0-9]+-[a-z0-9-]{1,80}$/.test(args.build_id)) return args.build_id;
+  } catch {
+    // unparseable args — fall through to the thread's build
+  }
+  return ctx.buildId;
+}
 // The thread's whole job is to revise this file; it must be fully visible or
 // a "full rewrite" (update_build) silently loses the truncated tail.
 const MAX_BUILD_CONTEXT_CHARS = 60_000;
@@ -171,6 +186,10 @@ async function buildThreadContext(tokenId: number, parentKey: string, buildId: s
         ? `${source.slice(0, MAX_BUILD_CONTEXT_CHARS)}\n… [source truncated]`
         : source;
   const [digest, locks] = await Promise.all([buildMemoryDigest(tokenId, buildId), locksFor(tokenId, buildId)]);
+  const buildFolderPath = buildFolderFor(parentKey, buildId);
+  const receipts: Receipts = buildFolderPath
+    ? collectReceipts({ folder: buildFolderPath, sessionDir: sessionDirName(parentKey), buildId })
+    : { receipts: {}, lastWriteMs: null, staleRender: false, staleCheck: false, staleTests: false, empty: true };
   const lockBlock = locks.length
     ? [
         'BUILD LOCKS (binding — enforced server-side; edit_build / write_build_file / delete_build_file / update_build / revert_build are REJECTED if they would violate these):',
@@ -210,6 +229,8 @@ async function buildThreadContext(tokenId: number, parentKey: string, buildId: s
     '- After writing or revising: check_build is a static scan (npm projects: package.json validated + the built dist/ scanned); verify_render actually renders the build in a headless browser and reports JS errors, loads, pixel activity and a screenshot path for the operator. Use it on visual builds before claiming success — and quote only what it reports (headless render ≠ your eyes: never claim you saw it or that it looks good).',
     ...lockBlock,
     ...memoryBlock,
+    `- Receipts (verified by activity): ${receiptsLine(receipts)}`,
+    '- Never claim a verification that is missing or STALE in the Receipts line above — run the tool or state the gap; recollection is not evidence.',
     `- Version history: ${archived} archived state${archived === 1 ? '' : 's'} (whole-folder snapshots of SOURCE files) — list_versions to inspect, revert_build to restore one; rerun project_build after a revert (dist/ is not versioned).`,
     "- Real artwork: embed {{looper-image:TOKEN_ID}} — the server swaps in the token's actual artwork at serve time. Never fake artwork otherwise.",
     `- Libraries: classic static builds may load the vendored local libraries under /libs/ (${libSummary()}) — call list_libs for the inventory and usage snippets. npm projects import their deps instead. Either way: no CDNs or other external scripts; fetch()/XHR/WebSockets stay banned.`,
@@ -281,16 +302,18 @@ export async function* streamAgentReplyWithTools(
           // going quiet — the console shows elapsed time live.
           yield { type: 'tool_tick', name: call.function.name, ms: Date.now() - startedAt };
         }
-        logActivity(sessionKey, call.function.name);
+        const callOk = !/^(tool .+ failed|unknown tool|tool .+ received unparseable)/i.test(result.modelText);
+        logActivity(sessionKey, call.function.name, { ok: callOk, ref: activityRefFor(call, ctx), ms: Date.now() - startedAt });
         yield {
           type: 'tool_done',
           name: call.function.name,
           ms: Date.now() - startedAt,
-          ok: !/^(tool .+ failed|unknown tool|tool .+ received unparseable)/i.test(result.modelText),
+          ok: callOk,
           note: firstLine(result.modelText),
         };
         if (result.artifact) yield { type: 'artifact', artifact: result.artifact };
         if (result.deleted) yield { type: 'artifact-removed', id: result.deleted };
+        if (result.decision) yield { type: 'decision', question: result.decision.question, options: result.decision.options };
         messages.push({ role: 'tool', tool_call_id: call.id, content: result.modelText });
       }
       // Breathing room between the pre-tool text and the post-tool conclusion.

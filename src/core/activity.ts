@@ -14,6 +14,12 @@ const MAX_EVENTS = 200;
 export interface ActivityEvent {
   at: string;
   tool: string;
+  /** Result flag for receipt tools (unknown on legacy lines). */
+  ok?: boolean;
+  /** Related build id when the call targeted a build (receipt ledger key). */
+  ref?: string;
+  /** Duration in ms (when measured). */
+  ms?: number;
 }
 
 function fileFor(sessionKey: string): string {
@@ -21,11 +27,15 @@ function fileFor(sessionKey: string): string {
   return path.join(activityRoot(), `${slug}.jsonl`);
 }
 
-export function logActivity(sessionKey: string, tool: string): void {
+export function logActivity(sessionKey: string, tool: string, meta: { ok?: boolean; ref?: string; ms?: number } = {}): void {
   try {
     const file = fileFor(sessionKey);
     fs.mkdirSync(activityRoot(), { recursive: true });
-    fs.appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), tool })}\n`, 'utf8');
+    const event: ActivityEvent = { at: new Date().toISOString(), tool };
+    if (meta.ok !== undefined) event.ok = meta.ok;
+    if (meta.ref) event.ref = meta.ref;
+    if (meta.ms !== undefined) event.ms = meta.ms;
+    fs.appendFileSync(file, `${JSON.stringify(event)}\n`, 'utf8');
     const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
     if (lines.length > MAX_EVENTS + 50) {
       fs.writeFileSync(file, `${lines.slice(-MAX_EVENTS).join('\n')}\n`, 'utf8');
@@ -57,4 +67,35 @@ export function listActivity(sessionKey: string, limit = 60): ActivityEvent[] {
   } catch {
     return [];
   }
+}
+
+/** Scan EVERY session's activity file for events about one build id (receipt ledger). Newest first. */
+export function eventsForRef(ref: string, tools?: Set<string>): ActivityEvent[] {
+  const out: ActivityEvent[] = [];
+  let files: fs.Dirent[];
+  try {
+    files = fs.readdirSync(activityRoot(), { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const f of files) {
+    if (!f.isFile() || !f.name.endsWith('.jsonl')) continue;
+    let lines: string[];
+    try {
+      lines = fs.readFileSync(path.join(activityRoot(), f.name), 'utf8').split('\n').filter(Boolean);
+    } catch {
+      continue;
+    }
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line) as ActivityEvent;
+        if (parsed && parsed.ref === ref && typeof parsed.tool === 'string' && (!tools || tools.has(parsed.tool))) {
+          out.push(parsed);
+        }
+      } catch {
+        // skip a corrupt line, keep the rest
+      }
+    }
+  }
+  return out.sort((a, b) => (a.at < b.at ? 1 : -1));
 }

@@ -60,6 +60,9 @@ check('good build: clean verdict', /RENDERED CLEAN/.test(good.modelText));
 check('good build: pixel stats present', /% of the frame differs from the dominant color/.test(good.modelText));
 const shot = good.modelText.match(/screenshot saved for the operator: (.+\.png)/);
 check('good build: screenshot exists on disk', Boolean(shot) && fs.existsSync(shot![1]), shot?.[1] ?? 'no path in report');
+check('good build: a11y probe section present', /a11y probe \(approximate/.test(good.modelText));
+const mobile = await call('verify_render', { build_id: pick.id, viewports: ['390x844'] });
+check('viewport capture: 390x844 line + overflow measurement', /viewport 390x844 \(390×844\)/.test(mobile.modelText), mobile.modelText.match(/- viewport [^\n]*/)?.[0] ?? 'no viewport line');
 
 // --- 2. a deliberately broken build: must be caught, not reported clean.
 const dir = path.join(buildsRoot(), `web_${TOKEN}`);

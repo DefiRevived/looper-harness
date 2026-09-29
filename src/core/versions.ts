@@ -23,6 +23,30 @@ function versionDir(sessionDir: string, buildId: string): string {
   return path.join(versionsRoot(), sessionDir, buildId);
 }
 
+/** Labels sidecar (ts → label). Kept OUT of snapshot folders so trees stay pure. */
+function labelsFile(sessionDir: string, buildId: string): string {
+  return path.join(versionDir(sessionDir, buildId), 'labels.json');
+}
+
+function readLabels(sessionDir: string, buildId: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(labelsFile(sessionDir, buildId), 'utf8')) as Record<string, string>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLabel(sessionDir: string, buildId: string, ts: number, label: string): void {
+  try {
+    const labels = readLabels(sessionDir, buildId);
+    labels[String(ts)] = label.slice(0, 120);
+    fs.writeFileSync(labelsFile(sessionDir, buildId), JSON.stringify(labels), 'utf8');
+  } catch {
+    // labels are cosmetic — never fail a snapshot over one
+  }
+}
+
 /** Walk files under a root → relative paths (recursive, managed dirs skipped). */
 function walkFiles(root: string, base = root): string[] {
   let entries: fs.Dirent[];
@@ -79,8 +103,8 @@ function versionEntries(sessionDir: string, buildId: string): VersionEntry[] {
   return out.sort((a, b) => b.ts - a.ts); // newest first
 }
 
-/** Snapshot the build FOLDER as the next archived version (prunes to MAX_VERSIONS). */
-export function archiveVersion(sessionDir: string, buildId: string, folder: string): void {
+/** Snapshot the build FOLDER as the next archived version (prunes to MAX_VERSIONS). Returns the version ts. */
+export function archiveVersion(sessionDir: string, buildId: string, folder: string, label?: string): number {
   const dir = versionDir(sessionDir, buildId);
   fs.mkdirSync(dir, { recursive: true });
   let ts = Date.now();
@@ -92,20 +116,25 @@ export function archiveVersion(sessionDir: string, buildId: string, folder: stri
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.copyFileSync(path.join(folder, rel), dest);
   }
+  if (label) writeLabel(sessionDir, buildId, ts, label);
   const entries = versionEntries(sessionDir, buildId);
   for (const stale of entries.slice(MAX_VERSIONS)) {
     fs.rmSync(stale.path, { recursive: true, force: true });
   }
+  return ts;
 }
 
 export interface ArchivedVersion {
   ts: number;
   bytes: number;
+  /** Optional label from snapshot_build ("before refactor"). */
+  label?: string;
 }
 
 /** Archived versions, newest first (index 1 in tooling = most recent prior state). */
 export function listVersions(sessionDir: string, buildId: string): ArchivedVersion[] {
-  return versionEntries(sessionDir, buildId).map((e) => ({ ts: e.ts, bytes: e.bytes }));
+  const labels = readLabels(sessionDir, buildId);
+  return versionEntries(sessionDir, buildId).map((e) => ({ ts: e.ts, bytes: e.bytes, label: labels[String(e.ts)] }));
 }
 
 /** The full file set of archived version `index` (1-based, newest first). */

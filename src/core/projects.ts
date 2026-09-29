@@ -152,7 +152,7 @@ interface NpmResult {
   timedOut: boolean;
 }
 
-function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<NpmResult> {
+function runNpm(args: string[], cwd: string, timeoutMs: number, onOutput?: (chunk: string) => void): Promise<NpmResult> {
   return new Promise((resolve) => {
     const cli = npmCliPath();
     const child = cli
@@ -165,7 +165,9 @@ function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<NpmResu
       child.kill();
     }, timeoutMs);
     const cap = (chunk: Buffer): void => {
-      out += chunk.toString('utf8');
+      const text = chunk.toString('utf8');
+      out += text;
+      if (onOutput) onOutput(text);
       if (out.length > 200_000) out = out.slice(-200_000);
     };
     child.stdout?.on('data', cap);
@@ -192,6 +194,145 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   const run = queue.then(fn, fn);
   queue = run.catch(() => undefined);
   return run;
+}
+
+// --- job registry (background installs/builds + job_status) -----------------
+
+export interface JobSnapshot {
+  id: string;
+  kind: 'install' | 'build';
+  state: 'queued' | 'running' | 'done';
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  ok?: boolean;
+  message?: string;
+  tail: string;
+  /** How many not-yet-finished jobs were created before this one. */
+  queueAhead: number;
+}
+
+interface JobInternal extends JobSnapshot {
+  folder: string;
+}
+
+const jobs = new Map<string, JobInternal>();
+let jobSeq = 0;
+
+function newJob(kind: JobSnapshot['kind'], folder: string): JobInternal {
+  const job: JobInternal = {
+    id: `${kind}-${Date.now().toString(36)}-${(++jobSeq).toString(36)}`,
+    kind,
+    state: 'queued',
+    createdAt: Date.now(),
+    tail: '',
+    queueAhead: 0,
+    folder,
+  };
+  jobs.set(job.id, job);
+  pruneJobs();
+  return job;
+}
+
+function pruneJobs(): void {
+  const finished = [...jobs.values()].filter((j) => j.state === 'done').sort((a, b) => b.createdAt - a.createdAt);
+  for (const stale of finished.slice(12)) jobs.delete(stale.id);
+}
+
+function snapshotOf(job: JobInternal): JobSnapshot {
+  const ahead = [...jobs.values()].filter((j) => j.state !== 'done' && j.createdAt < job.createdAt).length;
+  return {
+    id: job.id,
+    kind: job.kind,
+    state: job.state,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    endedAt: job.endedAt,
+    ok: job.ok,
+    message: job.message,
+    tail: job.tail,
+    queueAhead: job.state === 'queued' ? ahead : 0,
+  };
+}
+
+/** Snapshot of one job (or the latest one), plus active + recent lists. */
+export function jobStatus(id?: string): { job?: JobSnapshot; active: JobSnapshot[]; recent: JobSnapshot[] } {
+  const all = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
+  return {
+    job: id ? (jobs.has(id) ? snapshotOf(jobs.get(id) as JobInternal) : undefined) : all.length ? snapshotOf(all[0]) : undefined,
+    active: all.filter((j) => j.state !== 'done').map(snapshotOf),
+    recent: all.filter((j) => j.state === 'done').slice(0, 4).map(snapshotOf),
+  };
+}
+
+/** Run a heavy job either in the background (job id returned immediately) or awaited. */
+function enqueueJob<T extends { ok: boolean; message: string }>(
+  kind: JobSnapshot['kind'],
+  folder: string,
+  background: boolean,
+  run: (tail: (chunk: string) => void) => Promise<T>,
+): Promise<{ result: T | null; job: JobInternal }> {
+  const job = newJob(kind, folder);
+  const tail = (chunk: string): void => {
+    job.tail = `${job.tail}${chunk}`.slice(-5000);
+  };
+  const started = serialize(async () => {
+    job.state = 'running';
+    job.startedAt = Date.now();
+    try {
+      const result = await run(tail);
+      job.state = 'done';
+      job.ok = result.ok;
+      job.message = result.message;
+      job.endedAt = Date.now();
+      return result;
+    } catch (err) {
+      job.state = 'done';
+      job.ok = false;
+      job.message = `job crashed: ${(err as Error).message}`;
+      job.endedAt = Date.now();
+      return { ok: false, message: job.message } as unknown as T;
+    }
+  });
+  if (background) {
+    void started.then(() => undefined);
+    return Promise.resolve({ result: null, job });
+  }
+  return started.then((result) => ({ result, job }));
+}
+
+/** Human-readable job status (job_status tool). */
+export function jobStatusText(id?: string): string {
+  const { job, active, recent } = jobStatus(id);
+  const fmt = (j: JobSnapshot): string => {
+    const elapsed = (j.state === 'done' ? (j.endedAt ?? Date.now()) : Date.now()) - (j.startedAt ?? j.createdAt);
+    const state = j.state === 'done' ? (j.ok ? 'done ✓' : 'FAILED ✗') : j.state;
+    const queue = j.state === 'queued' && j.queueAhead ? ` · ${j.queueAhead} ahead in queue` : '';
+    return `- ${j.id} [${state}] ${Math.max(0, Math.round(elapsed / 1000))}s${queue}`;
+  };
+  if (id && !job) {
+    return `job_status: no job with id "${id}" in this process (jobs are in-memory — a server restart clears them).`;
+  }
+  if (!job && !active.length && !recent.length) {
+    return 'No toolchain jobs yet. project_install / project_build create one — run them with background:true to get the job id immediately.';
+  }
+  const lines: string[] = [];
+  if (job) {
+    lines.push(`JOB ${job.id} (${job.kind})`, fmt(job));
+    if (job.state === 'done' && job.message) lines.push(`- result: ${job.message}`);
+    if (job.tail && job.state !== 'done') {
+      const tail = job.tail.trim().split('\n').slice(-15);
+      if (tail.length) lines.push(`- output tail:\n${tail.join('\n')}`);
+    }
+    if (!id && job.state === 'done' && job.tail) {
+      const tail = job.tail.trim().split('\n').slice(-8);
+      if (tail.length) lines.push(`- last output:\n${tail.join('\n')}`);
+    }
+  }
+  const others = active.filter((j) => j.id !== job?.id);
+  if (others.length) lines.push('active jobs:', ...others.map(fmt));
+  if (!id && recent.length) lines.push('recent:', ...recent.map(fmt));
+  return lines.join('\n');
 }
 
 function countInstalled(folder: string): number {
@@ -250,13 +391,16 @@ export function projectDistInfo(folder: string): { files: Array<{ rel: string; b
 }
 
 /** project_install — validate deps against the allowlist, then npm install them. */
-export async function projectInstall(folder: string): Promise<{ ok: boolean; message: string }> {
+export async function projectInstall(
+  folder: string,
+  opts: { background?: boolean } = {},
+): Promise<{ ok: boolean; message: string; jobId?: string }> {
   const check = checkPackage(folder);
   if (!check.ok) return { ok: false, message: `project_install rejected: ${check.problem}` };
   if (!check.deps.length) return { ok: false, message: 'project_install rejected: package.json lists no dependencies to install.' };
 
-  return serialize(async () => {
-    const res = await runNpm(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], folder, INSTALL_TIMEOUT_MS);
+  const { result, job } = await enqueueJob('install', folder, opts.background === true, async (tail) => {
+    const res = await runNpm(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], folder, INSTALL_TIMEOUT_MS, tail);
     if (res.timedOut) {
       return { ok: false, message: `project_install timed out after ${INSTALL_TIMEOUT_MS / 1000}s and was killed. Check the dependency versions, or retry.` };
     }
@@ -270,18 +414,29 @@ export async function projectInstall(folder: string): Promise<{ ok: boolean; mes
       message: `Installed ${installed} packages into node_modules/ (npm install --ignore-scripts): ${list}. Next: project_build bundles the site into dist/.`,
     };
   });
+  if (!result) {
+    return {
+      ok: true,
+      message: `project_install started in the background (job ${job.id}). Poll job_status for progress and output — the final result shows up there.`,
+      jobId: job.id,
+    };
+  }
+  return result;
 }
 
 /** project_build — run the project's build (vite) with a relative base; dist/ is the site. */
-export async function projectBuild(folder: string): Promise<{ ok: boolean; message: string }> {
+export async function projectBuild(
+  folder: string,
+  opts: { background?: boolean } = {},
+): Promise<{ ok: boolean; message: string; jobId?: string }> {
   const check = checkPackage(folder);
   if (!check.ok) return { ok: false, message: `project_build rejected: ${check.problem}` };
   if (!fs.existsSync(path.join(folder, 'node_modules'))) {
     return { ok: false, message: 'project_build rejected: node_modules/ is missing — run project_install first.' };
   }
 
-  return serialize(async () => {
-    const res = await runNpm(['run', 'build', '--', '--base', './'], folder, BUILD_TIMEOUT_MS);
+  const { result, job } = await enqueueJob('build', folder, opts.background === true, async (tail) => {
+    const res = await runNpm(['run', 'build', '--', '--base', './'], folder, BUILD_TIMEOUT_MS, tail);
     if (res.timedOut) {
       return { ok: false, message: `project_build timed out after ${BUILD_TIMEOUT_MS / 1000}s and was killed. Fix the build error (or simplify) and retry.` };
     }
@@ -305,4 +460,12 @@ export async function projectBuild(folder: string): Promise<{ ok: boolean; messa
         'Run check_build (static) and verify_render (real render) on it now.',
     };
   });
+  if (!result) {
+    return {
+      ok: true,
+      message: `project_build started in the background (job ${job.id}). Poll job_status — when it reports done ✓ the new dist/ is being served and you can check_build / verify_render.`,
+      jobId: job.id,
+    };
+  }
+  return result;
 }

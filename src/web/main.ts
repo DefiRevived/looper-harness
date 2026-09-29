@@ -1560,6 +1560,8 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
             ms?: number;
             argsChars?: number;
             artifact?: ArtifactInfo;
+            question?: string;
+            options?: string[];
           };
           if (event.type === 'delta' && event.text) {
             content += event.text;
@@ -1600,6 +1602,9 @@ function addArtifact(artifact: ArtifactInfo, opts: { expand?: boolean } = {}): v
               if (!artifactsList.childElementCount) artifactsEmpty.classList.remove('hidden');
             }
             appendBuildLine(chatLogEl, 'tool', '✕ build deleted');
+          } else if (event.type === 'decision' && event.question && event.options?.length) {
+            renderDecisionCard(event.question, event.options, (choice) => void sendBuildMessage(`Decision: ${choice}`), (el) => chatLogEl.appendChild(el));
+            chatLogEl.scrollTop = chatLogEl.scrollHeight;
           }
         }
       }
@@ -1766,6 +1771,38 @@ async function renderHistory(): Promise<void> {
   }
 }
 
+/** request_decision card: tappable options; the choice is sent as the next user message. */
+function renderDecisionCard(question: string, options: string[], onChoice: (choice: string) => void, mount: (el: HTMLElement) => void): void {
+  const card = document.createElement('div');
+  card.className = 'decision-card';
+  const q = document.createElement('div');
+  q.className = 'decision-q';
+  q.textContent = `❓ ${question}`;
+  card.appendChild(q);
+  const row = document.createElement('div');
+  row.className = 'decision-opts';
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'decision-opt';
+    btn.textContent = opt;
+    btn.addEventListener('click', () => {
+      for (const b of Array.from(row.querySelectorAll('button'))) {
+        b.disabled = true;
+        b.classList.toggle('chosen', b === btn);
+      }
+      const note = document.createElement('div');
+      note.className = 'decision-note';
+      note.textContent = `choice sent: ${opt}`;
+      card.appendChild(note);
+      onChoice(opt);
+    });
+    row.appendChild(btn);
+  }
+  card.appendChild(row);
+  mount(card);
+}
+
 async function sendMessage(text: string): Promise<void> {
   if (streaming) return;
   streaming = true;
@@ -1823,6 +1860,8 @@ async function sendMessage(text: string): Promise<void> {
           ms?: number;
           argsChars?: number;
           artifact?: ArtifactInfo;
+          question?: string;
+          options?: string[];
         };
         if (event.type === 'delta' && event.text) {
           content += event.text;
@@ -1849,6 +1888,9 @@ async function sendMessage(text: string): Promise<void> {
           addArtifact(event.artifact, { expand: true });
           bumpBuildBadge();
           addBuildChip(event.artifact);
+        } else if (event.type === 'decision' && event.question && event.options?.length) {
+          renderDecisionCard(event.question, event.options, (choice) => void sendMessage(`Decision: ${choice}`), (el) => chatLog.insertBefore(el, bubble));
+          chatLog.scrollTop = chatLog.scrollHeight;
         }
       }
     }

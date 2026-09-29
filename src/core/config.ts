@@ -30,6 +30,10 @@ export const config = {
   // Default ON (public posture); LOOPER_REQUIRE_OWNERSHIP=false disables.
   requireOwnership: env('LOOPER_REQUIRE_OWNERSHIP', 'true') !== 'false',
   chatRateLimitPerMinute: Number(env('CHAT_RATE_LIMIT_PER_MINUTE', '0')),
+  // run_module sandbox: when Node's permission model cannot be enforced on this
+  // platform, the tool refuses by default (fail closed). Set true to allow
+  // unguarded execution anyway — the operator accepts the risk.
+  runUnsandboxed: env('LOOPER_RUN_UNSANDBOXED', 'false') === 'true',
   maxMessageChars: Number(env('LOOPER_MAX_MESSAGE_CHARS', '4000')),
   dream: {
     enabled: env('DREAM_ENABLED', 'true') !== 'false',

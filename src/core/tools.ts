@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { config } from './config.js';
 import { buildsRoot } from './settings.js';
 import { loadLooper } from './codex.js';
@@ -10,9 +11,13 @@ import { lockAdd, lockRemove, locksFor, memoryRecall, memoryRemember, purgeBuild
 import { applyVersionTree, archiveVersion, listVersions, purgeVersions, readVersionTree } from './versions.js';
 import { looperImageCount } from './looperAssets.js';
 import { libManifest } from './libs.js';
-import { allowlistSummary, checkPackage, isProjectFolder, projectBuild, projectDistInfo, projectInstall } from './projects.js';
+import { allowlistSummary, checkPackage, isProjectFolder, jobStatusText, PROJECT_ALLOWLIST, projectBuild, projectDistInfo, projectInstall } from './projects.js';
 import { searchContracts, webFetch, webSearch } from './research.js';
-import { renderBuild, type RenderReport } from './render.js';
+import { diffTrees } from './diff.js';
+import { contractEvidence, ownerOfCheck } from './evidence.js';
+import { buildStatusReport, collectReceipts } from './receipts.js';
+import { DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, runBuildModule } from './runner.js';
+import { renderBuild, resizePng, type RenderReport } from './render.js';
 import {
   chainLabel,
   explorerTx,
@@ -50,6 +55,8 @@ export interface ToolResult {
   artifact?: Artifact;
   /** Build id that was deleted — the console removes the card live. */
   deleted?: string;
+  /** request_decision — the console renders a decision card from this. */
+  decision?: { question: string; options: string[] };
 }
 
 const MAX_ARTIFACT_BYTES = 200_000; // per TEXT file (chars)
@@ -143,6 +150,12 @@ function buildIndex(parentKey: string, buildId: string): { file: string; kind: '
     if (fs.existsSync(file)) return { file, kind };
   }
   return null;
+}
+
+/** Absolute folder of an existing build (shared with receipts/thread context). */
+export function buildFolderFor(parentKey: string, buildId: string): string | null {
+  const index = buildIndex(parentKey, buildId);
+  return index ? path.dirname(index.file) : null;
 }
 
 /** Top-level dirs managed by the project toolchain — never part of the source view. */
@@ -850,7 +863,7 @@ async function projectInstallTool(args: Record<string, unknown>, ctx: ToolContex
         `project_install failed: this build is a classic static build (no package.json). For real npm dependencies: write package.json with allowlisted deps (${allowlistSummary()}) + a "build": "vite build" script, add src/ files, then run project_install.`,
     };
   }
-  const res = await projectInstall(target.folder);
+  const res = await projectInstall(target.folder, { background: args.background === true });
   return { modelText: res.message };
 }
 
@@ -864,8 +877,9 @@ async function projectBuildTool(args: Record<string, unknown>, ctx: ToolContext)
   if (!isProjectFolder(target.folder)) {
     return { modelText: 'project_build failed: this build is a classic static build (no package.json) — nothing to bundle.' };
   }
-  const res = await projectBuild(target.folder);
+  const res = await projectBuild(target.folder, { background: args.background === true });
   if (!res.ok) return { modelText: res.message };
+  if (res.jobId) return { modelText: res.message };
   const artifact = artifactFor(target.parentKey, target.buildId);
   return { modelText: res.message, artifact: artifact ?? undefined };
 }
@@ -1430,9 +1444,19 @@ async function verifyRender(args: Record<string, unknown>, ctx: ToolContext): Pr
   if (readBuildSource(parentKey, buildId) === null) {
     return { modelText: `verify_render failed: build ${buildId} not found. Call list_builds for valid ids.` };
   }
+  // Optional extra viewports: ["390x844", "768x1024"] (max 3; primary is always 1280x800).
+  const rawViewports = Array.isArray(args.viewports) ? (args.viewports as unknown[]) : [];
+  const viewports: Array<{ label: string; width: number; height: number }> = [];
+  for (const raw of rawViewports.slice(0, 3)) {
+    const m = /^(\d{2,4})\s*[x×]\s*(\d{2,4})$/i.exec(String(raw).trim());
+    if (!m) continue;
+    const width = Math.min(3840, Math.max(240, Number(m[1])));
+    const height = Math.min(2160, Math.max(240, Number(m[2])));
+    viewports.push({ label: `${width}x${height}`, width, height });
+  }
   let report: RenderReport;
   try {
-    report = await renderBuild(parentKey, buildId);
+    report = await renderBuild(parentKey, buildId, { viewports });
   } catch (err) {
     return { modelText: `verify_render failed: could not start the headless browser (${(err as Error).message.slice(0, 200)}).` };
   }
@@ -1460,6 +1484,9 @@ async function verifyRender(args: Record<string, unknown>, ctx: ToolContext): Pr
   lines.push(`- uncaught JS errors: ${report.pageErrors.length ? `\n  · ${report.pageErrors.join('\n  · ')}` : 'NONE ✓'}`);
   lines.push(`- console errors: ${report.consoleErrors.length ? `\n  · ${report.consoleErrors.join('\n  · ')}` : 'NONE ✓'}`);
   if (report.consoleWarnings.length) lines.push(`- console warnings (usually harmless): ${clip(report.consoleWarnings.join(' | '), 240)}`);
+  if (report.consoleLogs.length) {
+    lines.push(`- console output (${report.consoleLogs.length} message${report.consoleLogs.length === 1 ? '' : 's'} — in-page receipts for tests you added):\n  · ${report.consoleLogs.join('\n  · ')}`);
+  }
   if (report.failedRequests.length) lines.push(`- failed requests: ${report.failedRequests.join(' | ')}`);
   const libs = report.loadedFrom.filter((u) => u.includes('/libs/'));
   if (libs.length) lines.push(`- vendored libraries loaded: ${libs.map((u) => (u.split('/libs/')[1] ?? u).slice(0, 80)).join(', ')}`);
@@ -1473,9 +1500,40 @@ async function verifyRender(args: Record<string, unknown>, ctx: ToolContext): Pr
     const blankHint = p.nonBackgroundPct <= 1 ? ' — looks near-blank, which is fine for plain-text pages but suspicious for visual builds' : '';
     lines.push(`- pixels: ${p.nonBackgroundPct}% of the frame differs from the dominant color · mean luma ${p.meanLuma}/255 · captured at ${p.width}×${p.height}${blankHint}`);
   }
+  for (const vp of report.viewports) {
+    const ov = vp.overflow;
+    lines.push(
+      `- viewport ${vp.label} (${vp.width}×${vp.height}): ${vp.errors ? `${vp.errors} error(s) ⚠` : 'no errors'} · ${
+        ov
+          ? ov.x
+            ? `HORIZONTAL OVERFLOW ⚠ (${ov.scrollWidth}px content in ${ov.clientWidth}px${ov.offenders.length ? ` — ${ov.offenders.join('; ')}` : ''})`
+            : 'no horizontal overflow ✓'
+          : 'overflow not measured'
+      }${vp.pixels ? ` · ${vp.pixels.nonBackgroundPct}% pixels` : ''}${vp.screenshot ? ` · shot: ${vp.screenshot}` : ''}`,
+    );
+  }
+  if (report.a11y) {
+    const a = report.a11y;
+    const issues: string[] = [];
+    if (a.missingAlt) issues.push(`${a.missingAlt} <img> without alt attributes`);
+    if (a.namelessControls.length) issues.push(`controls with no accessible name: ${a.namelessControls.join(', ')}`);
+    if (a.lowContrast.length) issues.push(`low contrast (approximate): ${a.lowContrast.map((c) => `${c.snippet} (${c.ratio}:1, ${c.fg} on ${c.bg})`).join('; ')}`);
+    lines.push(
+      `- a11y probe (approximate, ${a.textSampled} text sample${a.textSampled === 1 ? '' : 's'}): ${issues.length ? `\n  · ${issues.join('\n  · ')}` : 'no obvious issues ✓ (alt text, control names, sampled contrast)'}`,
+    );
+  }
+  const extraIssues =
+    report.viewports.some((v) => v.errors > 0 || v.overflow?.x === true) ||
+    (report.a11y ? report.a11y.missingAlt > 0 || report.a11y.namelessControls.length > 0 : false);
   const clean = !report.navigationError && !report.pageErrors.length && !report.consoleErrors.length && !report.failedRequests.length;
   lines.push(
-    `- verdict: ${clean ? 'RENDERED CLEAN — the page loaded, scripts executed without errors, nothing failed to load ✓' : 'RENDERED WITH ISSUES — see the lines above; fix before claiming success.'}`,
+    `- verdict: ${
+      clean && !extraIssues
+        ? 'RENDERED CLEAN — the page loaded, scripts executed without errors, nothing failed to load ✓'
+        : clean
+          ? 'RENDERED, with viewport/a11y findings above — review before claiming success.'
+          : 'RENDERED WITH ISSUES — see the lines above; fix before claiming success.'
+    }`,
   );
   lines.push(`- screenshot saved for the operator: ${report.screenshot || '(not captured)'}`);
   lines.push(
@@ -1735,7 +1793,8 @@ function listVersionsTool(args: Record<string, unknown>, ctx: ToolContext): Tool
     return { modelText: `No archived versions for "${titleFromFile(buildId)}" yet — a version is captured automatically the first time the build is revised.` };
   }
   const lines = versions.map(
-    (v, i) => `${i + 1}. ${new Date(v.ts).toISOString()} — ${sizeLabel(v.bytes)}${i === 0 ? ' (most recent prior state)' : ''}`,
+    (v, i) =>
+      `${i + 1}. ${new Date(v.ts).toISOString()} — ${sizeLabel(v.bytes)}${v.label ? ` · label "${v.label}"` : ''}${i === 0 ? ' (most recent prior state)' : ''}`,
   );
   return {
     modelText: `Archived versions of "${titleFromFile(buildId)}" (${versions.length}, newest first — revert_build takes these numbers):\n${lines.join('\n')}`,
@@ -2009,11 +2068,12 @@ const DELETE_BUILD_FILE_TOOL: ToolDefinition = {
 
 const PROJECT_INSTALL_TOOL: ToolDefinition = {
   name: 'project_install',
-  description: `Install this build's npm dependencies for real (package.json → node_modules). Dependency names must be in the curated allowlist (${allowlistSummary()}). Runs npm install with --ignore-scripts inside the build folder; it installs sequentially (one heavy job at a time) and can take up to a few minutes — tell the operator when you start one. The build must be a Node project (package.json with an allowlisted deps list and a "build" script). After installing, run project_build.'`,
+  description: `Install this build's npm dependencies for real (package.json → node_modules). Dependency names must be in the curated allowlist (${allowlistSummary()}) — call list_allowlist for the full list before editing package.json. Runs npm install with --ignore-scripts inside the build folder; heavy jobs run one at a time. Set background:true to get a job id immediately and poll job_status (preferred when you have other work this turn); otherwise the call blocks until it finishes (can take minutes — tell the operator). After installing, run project_build.'`,
   parameters: {
     type: 'object',
     properties: {
       build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' },
+      background: { type: 'boolean', description: 'Start as a background job and return a job id immediately (poll job_status).' },
     },
     required: [],
   },
@@ -2023,11 +2083,12 @@ const PROJECT_INSTALL_TOOL: ToolDefinition = {
 const PROJECT_BUILD_TOOL: ToolDefinition = {
   name: 'project_build',
   description:
-    'Bundle a Node project build (npm run build — e.g. vite) into dist/: the built site that the preview, verify_render and hosting all serve. Run it after every source change and BEFORE check_build/verify_render; it reports the dist file list or the exact build error. Requires project_install first (node_modules present).',
+    'Bundle a Node project build (npm run build — e.g. vite) into dist/: the built site that the preview, verify_render and hosting all serve. Run it after every source change and BEFORE check_build/verify_render; it reports the dist file list or the exact build error. Requires project_install first (node_modules present). Set background:true for a job id + job_status polling instead of blocking.',
   parameters: {
     type: 'object',
     properties: {
       build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' },
+      background: { type: 'boolean', description: 'Start as a background job and return a job id immediately (poll job_status).' },
     },
     required: [],
   },
@@ -2102,11 +2163,16 @@ const CHECK_BUILD_TOOL: ToolDefinition = {
 const VERIFY_RENDER_TOOL: ToolDefinition = {
   name: 'verify_render',
   description:
-    "Actually RENDER a saved build in a real headless Chromium and report exactly what happened: HTTP status, uncaught JS errors, console errors/warnings, which resources loaded (e.g. /libs/three.min.js) and which failed, DOM/canvas inventory, a pixel analysis of the screenshot (catches blank or broken pages) and the path of the screenshot saved for the operator. Use it after writing or updating a visual build — it is the only way you get render evidence, and it replaces the old 'cannot render' limitation. Report its results honestly: quote only what the report shows; you still cannot judge aesthetics, and a clean report is not proof the operator will like it.",
+    "Actually RENDER a saved build in a real headless Chromium and report exactly what happened: HTTP status, uncaught JS errors, console errors/warnings AND console output (your in-page test receipts — console.log in the build shows up here), which resources loaded (e.g. /libs/three.min.js) and which failed, DOM/canvas inventory, a pixel analysis of the screenshot (catches blank or broken pages), an approximate a11y probe (missing alts, nameless controls, sampled contrast) and the path of each screenshot saved for the operator. Optionally pass extra viewports (e.g. [\"390x844\", \"768x1024\"]) for responsive checks: each gets its own screenshot + a horizontal-overflow test (the classic mobile bug). Use it after writing or updating a visual build — it is the only way you get render evidence. Report its results honestly: quote only what the report shows; a clean report is not proof the operator will like it, and you cannot judge aesthetics.",
   parameters: {
     type: 'object',
     properties: {
       build_id: { type: 'string', description: 'Build id from list_builds.' },
+      viewports: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional extra viewports as "WxH" strings, e.g. ["390x844", "768x1024"] (max 3; primary is always 1280x800).',
+      },
     },
     required: ['build_id'],
   },
@@ -2259,7 +2325,7 @@ const LOCK_BUILD_TOOL: ToolDefinition = {
 const LIST_VERSIONS_TOOL: ToolDefinition = {
   name: 'list_versions',
   description:
-    "List a build's archived versions — every revision captures the PRIOR state automatically (newest first). Use to see what states exist before/after a revert, or to audit how a build evolved.",
+    "List a build's archived versions — every revision captures the PRIOR state automatically (newest first), and snapshot_build adds labeled checkpoints on top. Use to see what states exist before/after a revert, to find a labeled rollback point, or to audit how a build evolved (diff_build compares two of them).",
   parameters: {
     type: 'object',
     properties: { build_id: { type: 'string', description: 'Build id from list_builds.' } },
@@ -2413,19 +2479,613 @@ const LIST_LIBS_TOOL: ToolDefinition = {
   execute: listLibs,
 };
 
+/** Shared surface guard for the new console tools. */
+function webOnly(name: string, ctx: ToolContext): ToolResult | null {
+  if (ctx.surface !== 'web') return { modelText: `${name} is not available on this surface; reply in text instead.` };
+  return null;
+}
+
+/** list_allowlist — everything a build may install or load, in one call. */
+function listAllowlist(_args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('list_allowlist', ctx);
+  if (deny) return deny;
+  const libs = libManifest();
+  const npmLines: string[] = [];
+  for (let i = 0; i < PROJECT_ALLOWLIST.length; i += 6) {
+    npmLines.push(`  ${PROJECT_ALLOWLIST.slice(i, i + 6).join(', ')}`);
+  }
+  return {
+    modelText: [
+      `ALLOWLIST — what builds may use (${PROJECT_ALLOWLIST.length} npm packages + ${libs.length} vendored /libs libraries):`,
+      'npm packages (project_install enforces this list — nothing else can install):',
+      ...npmLines,
+      '- dependency version ranges: ^major.minor.patch, ~… or exact — no git/file/url dependencies.',
+      '- a Node project needs a package.json with allowlisted deps + a "build" script (e.g. "vite build").',
+      '- missing a package? Do NOT work around the allowlist — ask the operator to add it (src/core/projects.ts) or build with the vendored libraries instead.',
+      `vendored /libs libraries (classic builds load these with <script src="/libs/…">): ${libs.map((l) => `${l.name}@${l.version}`).join(', ')} — call list_libs for usage snippets.`,
+    ].join('\n'),
+  };
+}
+
+const LIST_ALLOWLIST_TOOL: ToolDefinition = {
+  name: 'list_allowlist',
+  description:
+    'The FULL allowlist every build is checked against: all npm packages project_install accepts (with the version-range rules and the required build-script rule) plus the vendored /libs libraries. Call this BEFORE writing package.json or picking a library — never discover a ban by trial and error.',
+  parameters: { type: 'object', properties: {} },
+  execute: listAllowlist,
+};
+
+/** run_module — sandboxed execution of a build's own JS module (tests / pure logic receipts). */
+async function runModuleTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const deny = webOnly('run_module', ctx);
+  if (deny) return deny;
+  const target = resolveToolBuild(args, ctx);
+  if (typeof target === 'string') return { modelText: `run_module failed: ${target}` };
+  const file = typeof args.file === 'string' ? args.file.trim() : '';
+  const fileProblem = validateBuildFilePath(file);
+  if (fileProblem) return { modelText: `run_module rejected: ${fileProblem}` };
+  if (!/\.(js|mjs)$/i.test(file)) {
+    return {
+      modelText:
+        'run_module runs plain .js / .mjs modules only (not .ts/.cjs) — write the test as a .js file with write_build_file. Top-level code runs on import; a default-exported function is called with your args.',
+    };
+  }
+  const rawArgs = Array.isArray(args.args) ? (args.args as unknown[]) : [];
+  const runArgs = rawArgs.map((a) => String(a)).slice(0, 20);
+  const timeoutS = Math.min(MAX_TIMEOUT_S, Math.max(1, Number(args.timeout_s) || DEFAULT_TIMEOUT_S));
+  const res = await runBuildModule(target.folder, file, runArgs, timeoutS);
+  if (res.refused) return { modelText: `run_module refused: ${res.refused}` };
+  const lines: string[] = [
+    `RAN ${file} in "${titleFromFile(target.buildId)}" — sandbox: ${
+      res.sandbox === 'enforced'
+        ? 'Node permission model (fs scoped to the build folder, subprocesses/workers/addons denied, env scrubbed)'
+        : 'UNSANDBOXED (operator override — tell the operator if you care about isolation)'
+    }.`,
+    res.timedOut ? `- TIMED OUT after ${timeoutS}s and was killed.` : `- exit code: ${res.exitCode} (${res.ok ? 'ok ✓' : 'FAILED ✗'}) · took ${Math.round(res.ranMs / 1000)}s`,
+  ];
+  if (res.output) lines.push(`- output:\n${res.output}`);
+  else lines.push('- output: (empty — a silent run gives no receipts; make the module print its results)');
+  lines.push(
+    res.ok
+      ? "- Real stdout/stderr above — quote it as the test result. Tests run before the last edit are stale; re-run after any change."
+      : '- Do NOT report this as passing. Fix the module (or the code it tests) and run it again.',
+  );
+  return { modelText: lines.join('\n') };
+}
+
+const RUN_MODULE_TOOL: ToolDefinition = {
+  name: 'run_module',
+  description:
+    "Run one of THIS build's JS modules in a sandboxed node process and read its real stdout/stderr — the receipts tool for tests, algorithms and pure logic. The sandbox (Node permission model): filesystem access is scoped to the build folder (reads AND writes — write test output files inside the build), child processes/workers/native addons are denied, the environment is scrubbed (no harness secrets). Network sockets are NOT blocked, but the fs scope means there are no secrets to leak — an honest limitation, not a claim. Not available if the platform cannot enforce the sandbox (fails closed; the operator can override). Usage: write the test with write_build_file, print results with console.log, then run it (args arrive as process.argv; a default-exported function is called with your args). Classic builds (no package.json): .js runs as CommonJS — use .mjs for import/export syntax, or plain .js scripts (ESM syntax in a .js is auto-detected and run as a module). Default timeout 15s, max 60s; output capped at 64KB.",
+  parameters: {
+    type: 'object',
+    properties: {
+      build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' },
+      file: { type: 'string', description: 'Build-relative module path, e.g. "tests/perft.js".' },
+      args: { type: 'array', items: { type: 'string' }, description: 'Optional string arguments (max 20) passed to the module.' },
+      timeout_s: { type: 'integer', description: 'Timeout seconds (default 15, max 60).' },
+    },
+    required: ['file'],
+  },
+  execute: runModuleTool,
+};
+
+/** job_status — progress + output tail for background installs/builds. */
+function jobStatusTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('job_status', ctx);
+  if (deny) return deny;
+  const id = typeof args.job_id === 'string' && args.job_id.trim() ? args.job_id.trim() : undefined;
+  return { modelText: jobStatusText(id) };
+}
+
+const JOB_STATUS_TOOL: ToolDefinition = {
+  name: 'job_status',
+  description:
+    'Check toolchain jobs started with project_install / project_build (background:true): state, elapsed, queue position, live output tail, and the final result. Prefer background jobs + polling over blocking calls when you have other work in the same turn. Without job_id you get the latest job plus active/recent lists. Jobs are in-memory (a server restart clears them).',
+  parameters: {
+    type: 'object',
+    properties: { job_id: { type: 'string', description: 'Job id from the project_install / project_build response.' } },
+    required: [],
+  },
+  execute: jobStatusTool,
+};
+
+/** search_build — grep across a build's text files. */
+function searchBuildTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('search_build', ctx);
+  if (deny) return deny;
+  const target = resolveToolBuild(args, ctx);
+  if (typeof target === 'string') return { modelText: `search_build failed: ${target}` };
+  const query = typeof args.query === 'string' ? args.query.trim() : '';
+  if (query.length < 2) return { modelText: 'search_build rejected: "query" must be at least 2 characters.' };
+  const useRegex = args.regex === true;
+  let re: RegExp;
+  try {
+    re = useRegex ? new RegExp(query, 'gi') : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  } catch (err) {
+    return { modelText: `search_build rejected: invalid regex — ${(err as Error).message}` };
+  }
+  const max = Math.min(80, Math.max(1, Number(args.max_results) || 40));
+  const results: Array<{ file: string; line: number; text: string }> = [];
+  let scanned = 0;
+  for (const f of walkBuildFolder(target.folder)) {
+    if (results.length >= max) break;
+    if (!isTextBuildFile(f.rel)) continue;
+    let src: string;
+    try {
+      src = fs.readFileSync(path.join(target.folder, f.rel), 'utf8');
+    } catch {
+      continue;
+    }
+    scanned++;
+    const lines = src.split('\n');
+    for (let i = 0; i < lines.length && results.length < max; i++) {
+      re.lastIndex = 0;
+      if (re.test(lines[i])) results.push({ file: f.rel, line: i + 1, text: lines[i].trim().slice(0, 160) });
+    }
+  }
+  if (!results.length) {
+    return {
+      modelText: `No matches for "${query}" in "${titleFromFile(target.buildId)}" (${scanned} text files scanned, ${useRegex ? 'regex' : 'case-insensitive'}).`,
+    };
+  }
+  const lines = results.map((r) => `${r.file}:${r.line}: ${r.text}`);
+  return {
+    modelText:
+      `SEARCH "${query}" in "${titleFromFile(target.buildId)}" — ${results.length} match${results.length === 1 ? '' : 'es'}${results.length >= max ? ' (capped)' : ''} across ${scanned} text files:\n${lines.join('\n')}\n` +
+      'Open one with read_build file="…"; change it with edit_build file="…".',
+  };
+}
+
+const SEARCH_BUILD_TOOL: ToolDefinition = {
+  name: 'search_build',
+  description:
+    "Find text across THIS build's text files (case-insensitive; set regex:true for a pattern) — returns file:line plus an excerpt for each match. Use it instead of re-reading whole files: locate a selector, function, id, color, or string first, then read/edit just what matters. Managed dirs (node_modules, dist) are skipped.",
+  parameters: {
+    type: 'object',
+    properties: {
+      build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' },
+      query: { type: 'string', description: 'Text to find (or a regex when regex:true).' },
+      regex: { type: 'boolean', description: 'Treat query as a regular expression (default false = literal, case-insensitive).' },
+      max_results: { type: 'integer', description: 'Max matches to return (default 40, max 80).' },
+    },
+    required: ['query'],
+  },
+  execute: searchBuildTool,
+};
+
+/** diff_build — what changed between two states of a build. */
+function treeFromFolder(folder: string): Map<string, Buffer> {
+  const tree = new Map<string, Buffer>();
+  for (const f of walkBuildFolder(folder)) {
+    try {
+      tree.set(f.rel, fs.readFileSync(path.join(folder, f.rel)));
+    } catch {
+      // unreadable — skip
+    }
+  }
+  return tree;
+}
+
+function resolveVersionTreeArg(
+  target: { parentKey: string; buildId: string; folder: string },
+  raw: unknown,
+): Map<string, Buffer> | { error: string } {
+  const v = raw === undefined || raw === null || raw === '' ? 1 : raw;
+  if (v === 'current') return treeFromFolder(target.folder);
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) {
+    return { error: 'version must be "current" or a number 1+ (1 = most recent archived state — see list_versions)' };
+  }
+  const tree = readVersionTree(sessionDirName(target.parentKey), target.buildId, n);
+  if (!tree) {
+    const count = listVersions(sessionDirName(target.parentKey), target.buildId).length;
+    return { error: `no archived version ${n} (${count} archived — list_versions shows them)` };
+  }
+  return tree;
+}
+
+function diffBuildTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('diff_build', ctx);
+  if (deny) return deny;
+  const target = resolveToolBuild(args, ctx);
+  if (typeof target === 'string') return { modelText: `diff_build failed: ${target}` };
+  const from = resolveVersionTreeArg(target, args.from);
+  if ('error' in from) return { modelText: `diff_build rejected (from): ${from.error}` };
+  const to = resolveVersionTreeArg(target, args.to === undefined ? 'current' : args.to);
+  if ('error' in to) return { modelText: `diff_build rejected (to): ${to.error}` };
+  const d = diffTrees(from, to);
+  if (!d.files.length) {
+    return { modelText: `No differences between the two states of "${titleFromFile(target.buildId)}".` };
+  }
+  const lines: string[] = [
+    `DIFF — "${titleFromFile(target.buildId)}" (${target.buildId}): ${d.added} added · ${d.removed} removed · ${d.changed} changed file${d.changed === 1 ? '' : 's'}${d.binary ? ` · ${d.binary} binary` : ''}`,
+  ];
+  for (const f of d.files) {
+    if (f.status === 'added') lines.push(`\n===== added: ${f.rel} (+${f.added} lines, ${sizeLabel(f.bytesTo)}) =====`);
+    else if (f.status === 'removed') lines.push(`\n===== removed: ${f.rel} (−${f.removed} lines, was ${sizeLabel(f.bytesFrom)}) =====`);
+    else if (f.status === 'binary') lines.push(`\n===== binary: ${f.rel} (${sizeLabel(f.bytesFrom)} → ${sizeLabel(f.bytesTo)}) =====`);
+    else {
+      lines.push(`\n===== ${f.rel} (+${f.added} / −${f.removed} lines) =====`);
+      if (f.text?.summaryOnly) lines.push(`  (${f.text.summaryOnly})`);
+      else if (f.text) lines.push(...f.text.lines.map((l) => `  ${l}`));
+    }
+    if (lines.length > 360) {
+      lines.push('… [diff truncated — compare specific files via list_versions + read_build]');
+      break;
+    }
+  }
+  lines.push('\nLegend: " " unchanged context · "-" removed · "+" added. Quote specific changed lines, not impressions.');
+  return { modelText: lines.join('\n') };
+}
+
+const DIFF_BUILD_TOOL: ToolDefinition = {
+  name: 'diff_build',
+  description:
+    "Semantic diff between two states of a build: per-file +/− line counts and a compact line diff (3 context lines; binary files as size deltas). from/to are 'current' or a version number from list_versions (1 = most recent archived state); defaults: from=1 (previous archived state), to='current'. Use it for change receipts — what exactly changed between versions — instead of guessing from memory.",
+  parameters: {
+    type: 'object',
+    properties: {
+      build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' },
+      from: { type: 'string', description: "'current' or a version number from list_versions (default 1 = previous state)." },
+      to: { type: 'string', description: "'current' or a version number (default 'current')." },
+    },
+    required: [],
+  },
+  execute: diffBuildTool,
+};
+
+/** read_looper_traits — the verbatim attribute array (exact strings). */
+async function readLooperTraits(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  if (ctx.surface !== 'web' && ctx.surface !== 'telegram') {
+    return { modelText: 'read_looper_traits is not available on this surface; reply in text instead.' };
+  }
+  const id = Number(args.token_id);
+  if (!Number.isInteger(id) || id < 1 || id > LOOPER_SUPPLY) {
+    return { modelText: `read_looper_traits rejected: token_id must be an integer 1–${LOOPER_SUPPLY}.` };
+  }
+  try {
+    const bundle = await loadLooper(id);
+    const { metadata, codex } = bundle;
+    const attrs = metadata.attributes ?? [];
+    const selected = codex.selected_visual_traits ?? [];
+    const lines: string[] = [`TRAITS — Looper #${id} (verbatim from the token metadata + codex; exact strings, no paraphrase):`];
+    if (attrs.length) {
+      lines.push(`- full on-chain attributes (${attrs.length}):`);
+      for (const a of attrs) lines.push(`  · ${a.trait_type}: ${String(a.value)}`);
+    } else {
+      lines.push('- full on-chain attributes: none on the token metadata — say so; do not invent values.');
+    }
+    if (selected.length) {
+      lines.push(`- codex-selected visual traits: ${selected.map((t) => `${t.layer}: ${t.trait}`).join(' · ')}`);
+    }
+    lines.push(`- image (Arweave ref — never fake it): ${metadata.image ?? codex.image ?? 'not on file'}`);
+    lines.push(
+      `- provenance: metadata + codex fetched live from Arweave via the token URI; codex source: ${
+        bundle.codexSource === 'arweave' ? 'the codex file itself' : 'SYNTHESIZED from attributes (codex unreachable — treat persona fields as thin)'
+      }`,
+    );
+    lines.push('- Use these exact values when a build needs the token\'s real trait strings; anything not listed is NOT sourced.');
+    return { modelText: lines.join('\n') };
+  } catch (err) {
+    return { modelText: `read_looper_traits failed for #${id}: ${(err as Error).message}. No trait data in hand — do not guess values.` };
+  }
+}
+
+const READ_LOOPER_TRAITS_TOOL: ToolDefinition = {
+  name: 'read_looper_traits',
+  description:
+    "The FULL, verbatim trait data for any Looper (1–7777): every on-chain attribute (trait_type: value — exact strings, e.g. the precise color/pattern names) plus the codex's selected visual traits, image reference and provenance. read_looper gives the persona; THIS gives the raw attributes when a build needs exact values (hex strings, item names) that paraphrase would ruin. Never substitute values you did not read here.",
+  parameters: {
+    type: 'object',
+    properties: { token_id: { type: 'integer', description: 'Looper token id (1–7777).' } },
+    required: ['token_id'],
+  },
+  execute: readLooperTraits,
+};
+
+/** contract_evidence — identity evidence for canonical-contract adjudication. */
+async function contractEvidenceTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const deny = webOnly('contract_evidence', ctx);
+  if (deny) return deny;
+  const chain = parseChain(args.chain);
+  if (!chain) return { modelText: 'contract_evidence rejected: "chain" must be base (default) or sepolia.' };
+  const address = typeof args.address === 'string' ? args.address.trim() : '';
+  if (!ADDRESS_RE.test(address)) return { modelText: 'contract_evidence rejected: "address" must be a 0x… contract address.' };
+  const rawId = args.token_id === undefined ? ctx.tokenId : Number(args.token_id);
+  const wantToken = Number.isInteger(rawId) && rawId >= 1 && rawId <= LOOPER_SUPPLY ? rawId : null;
+  try {
+    const ev = await contractEvidence(chain, address);
+    const lines: string[] = [`CONTRACT EVIDENCE — ${chainLabel(chain)} · ${address} (Blockscout)`];
+    lines.push(`- name: ${ev.name ?? '(no verified name)'} · source verified: ${ev.verified === undefined ? 'unknown' : ev.verified ? 'YES ✓' : 'NO ✗'}`);
+    if (ev.proxyType) {
+      const impls = ev.implementations.map((i) => `${i.address}${i.name ? ` (${i.name})` : ''}`).join(', ');
+      lines.push(`- proxy: ${ev.proxyType}${impls ? ` → implementation ${impls}` : ''}`);
+    }
+    if (ev.creator) lines.push(`- deployer/creator: ${ev.creator}${ev.creationTx ? ` · creation tx ${ev.creationTx}` : ''}`);
+    if (ev.token) {
+      lines.push(
+        `- token: ${ev.token.name ?? '?'} (${ev.token.symbol ?? '?'}) · total supply ${ev.token.totalSupply ?? '?'} · decimals ${ev.token.decimals ?? '?'}${ev.token.holders ? ` · holders ${ev.token.holders}` : ''}`,
+      );
+    } else {
+      lines.push('- token: Blockscout reports no ERC-20 token at this address (may be a plain contract or an NFT).');
+    }
+    if (wantToken !== null) {
+      const check = await ownerOfCheck(chain, address, wantToken);
+      if (check.ok) {
+        lines.push(`- ownerOf(${wantToken}) → ${check.owner} — THIS contract holds token #${wantToken} ✓ (canonical candidate for the operator's agent).`);
+        lines.push(`- To settle it: remember("canonical … = ${address} — evidence: ownerOf(${wantToken}) = ${check.owner}") and cite that pin afterwards.`);
+      } else {
+        lines.push(`- ownerOf(${wantToken}): no answer (${check.reason ?? 'call failed'}) — this contract does NOT hold token #${wantToken} (or is not an ERC-721).`);
+      }
+    }
+    lines.push(`- explorer: ${chain === 'sepolia' ? `https://eth-sepolia.blockscout.com/address/${address}` : `https://base.blockscout.com/address/${address}`}`);
+    lines.push('- When a name resolves to several contracts, gather evidence for EACH and rule by: ownerOf(your token id) answers + name/supply line up. State the rule you used; never split the difference.');
+    return { modelText: lines.join('\n') };
+  } catch (err) {
+    return { modelText: `contract_evidence failed: ${(err as Error).message}` };
+  }
+}
+
+const CONTRACT_EVIDENCE_TOOL: ToolDefinition = {
+  name: 'contract_evidence',
+  description:
+    "Hard identity evidence for one contract on Base/Sepolia: verified name, source-verification status, proxy → implementation chain, deployer and creation tx, ERC-20 name/symbol/supply/decimals/holders where applicable, and — when a token id is given (defaults to your own) — whether ownerOf(token_id) answers on it. THE tool for canonical adjudication when lookup_contract returns several candidates: evidence per candidate, then rule by ownerOf(your token) + name/supply match, then pin with remember. All fields are sourced from Blockscout at call time.",
+  parameters: {
+    type: 'object',
+    properties: {
+      address: { type: 'string', description: 'Contract address 0x…' },
+      token_id: { type: 'integer', description: 'Looper token id for the ownerOf check (default: your own token).' },
+      chain: { type: 'string', description: 'base (default) or sepolia.' },
+    },
+    required: ['address'],
+  },
+  execute: contractEvidenceTool,
+};
+
+/** build_status — the receipt ledger for one build. */
+function buildStatusTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('build_status', ctx);
+  if (deny) return deny;
+  const target = resolveToolBuild(args, ctx);
+  if (typeof target === 'string') return { modelText: `build_status failed: ${target}` };
+  const sessionDir = sessionDirName(target.parentKey);
+  const receipts = collectReceipts({ folder: target.folder, sessionDir, buildId: target.buildId });
+  const versionsCount = listVersions(sessionDir, target.buildId).length;
+  return { modelText: buildStatusReport({ buildId: target.buildId, title: titleFromFile(target.buildId), r: receipts, versionsCount }) };
+}
+
+const BUILD_STATUS_TOOL: ToolDefinition = {
+  name: 'build_status',
+  description:
+    'The receipt ledger for a build: when it was last written, which verifications (check_build / verify_render / project_build / run_module / project_install) have actually RUN, whether each passed, and which receipts are STALE (older than the last write). Use it before answering "is it done/working?" — and never claim a verification that this ledger shows as missing, failed, or stale.',
+  parameters: {
+    type: 'object',
+    properties: { build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' } },
+    required: [],
+  },
+  execute: buildStatusTool,
+};
+
+/** snapshot_build — labeled checkpoint in the version archive. */
+function snapshotBuildTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('snapshot_build', ctx);
+  if (deny) return deny;
+  const target = resolveToolBuild(args, ctx);
+  if (typeof target === 'string') return { modelText: `snapshot_build failed: ${target}` };
+  const label = typeof args.label === 'string' ? args.label.trim().slice(0, 120) : '';
+  if (!label) return { modelText: 'snapshot_build rejected: "label" is required (e.g. "working before physics refactor").' };
+  const dir = sessionDirName(target.parentKey);
+  const ts = archiveVersion(dir, target.buildId, target.folder, label);
+  const count = listVersions(dir, target.buildId).length;
+  return {
+    modelText: `Snapshot saved: "${titleFromFile(target.buildId)}" archived with label "${label}" (${new Date(ts).toISOString()}). ${count} archived version${count === 1 ? '' : 's'} now — list_versions shows the label; revert_build restores it by its list number.`,
+  };
+}
+
+const SNAPSHOT_BUILD_TOOL: ToolDefinition = {
+  name: 'snapshot_build',
+  description:
+    'Save a LABELED checkpoint of a build RIGHT NOW (whole source tree into the version archive — the same store revert_build restores from). Use it before risky changes so "go back to before the refactor" is one revert. Revisions already archive automatically; this adds a named, deliberate anchor on top.',
+  parameters: {
+    type: 'object',
+    properties: {
+      build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' },
+      label: { type: 'string', description: 'Short label, e.g. "working before physics refactor".' },
+    },
+    required: ['label'],
+  },
+  execute: snapshotBuildTool,
+};
+
+/** prepare_deploy — pack a build for hosting; the operator runs the actual deploy. */
+async function prepareDeployTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const deny = webOnly('prepare_deploy', ctx);
+  if (deny) return deny;
+  const target = resolveToolBuild(args, ctx);
+  if (typeof target === 'string') return { modelText: `prepare_deploy failed: ${target}` };
+  const cli = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const script = path.join(process.cwd(), 'scripts', 'pack-build.ts');
+  if (!fs.existsSync(cli) || !fs.existsSync(script)) {
+    return { modelText: 'prepare_deploy failed: the pack toolchain is missing in this runtime (tsx or scripts/pack-build.ts). Run npm install, or pack manually on the host.' };
+  }
+  const res = await new Promise<{ code: number | null; out: string }>((resolve) => {
+    const child = spawn(process.execPath, [cli, script, target.buildId, '--session', target.parentKey], {
+      cwd: process.cwd(),
+      windowsHide: true,
+    });
+    let out = '';
+    const cap = (chunk: Buffer): void => {
+      out += chunk.toString('utf8');
+      if (out.length > 60_000) out = out.slice(-60_000);
+    };
+    child.stdout?.on('data', cap);
+    child.stderr?.on('data', cap);
+    const timer = setTimeout(() => child.kill(), 180_000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, out });
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ code: -1, out: `could not start pack-build: ${err.message}` });
+    });
+  });
+  const tail = res.out.trim().split('\n').slice(-14).join('\n');
+  if (res.code !== 0) {
+    return {
+      modelText: `prepare_deploy failed (pack-build exit ${res.code}) — nothing was packed:\n${tail}\n(Fix the build first — check_build / project_build — then retry.)`,
+    };
+  }
+  const slug = target.buildId.replace(/^[0-9]+-/, '');
+  const folder = path.resolve(process.cwd(), 'deploy', slug);
+  let files = 0;
+  let bytes = 0;
+  const walk = (dir: string): void => {
+    try {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) walk(f);
+        else if (e.isFile()) {
+          files++;
+          bytes += fs.statSync(f).size;
+        }
+      }
+    } catch {
+      // empty/unreadable
+    }
+  };
+  if (fs.existsSync(folder)) walk(folder);
+  return {
+    modelText: [
+      `DEPLOY PACK READY — "${titleFromFile(target.buildId)}" packed to deploy/${slug}/ (${files} files, ${sizeLabel(bytes)}).`,
+      '- Hosting is the OPERATOR\'s step (the agent cannot run deploy CLIs). Give them exactly this:',
+      '```',
+      `cd deploy/${slug}`,
+      'vercel deploy --prod --yes',
+      '```',
+      '- Redeploys: repack first, then deploy from the SAME folder (the host project link lives there — never delete it).',
+      `- pack output tail:\n${tail}`,
+    ].join('\n'),
+  };
+}
+
+const PREPARE_DEPLOY_TOOL: ToolDefinition = {
+  name: 'prepare_deploy',
+  description:
+    'Pack a build into a self-contained deploy folder (placeholders resolved, embedded images extracted, /libs copied, wallet shim stripped) and get the exact hosting command for the operator. Use when the operator says ship/host/publish — this is the handoff receipt; the actual deploy is THEIR step. For npm projects the built dist/ is packed (run project_build first).',
+  parameters: {
+    type: 'object',
+    properties: { build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' } },
+    required: [],
+  },
+  execute: prepareDeployTool,
+};
+
+/** optimize_image — downscale a PNG build asset in the headless browser. */
+async function optimizeImageTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const deny = webOnly('optimize_image', ctx);
+  if (deny) return deny;
+  const target = resolveToolBuild(args, ctx);
+  if (typeof target === 'string') return { modelText: `optimize_image failed: ${target}` };
+  const file = typeof args.file === 'string' ? args.file.trim() : '';
+  const fileProblem = validateBuildFilePath(file);
+  if (fileProblem) return { modelText: `optimize_image rejected: ${fileProblem}` };
+  if (!/\.png$/i.test(file)) {
+    return { modelText: 'optimize_image handles .png only — for other formats, re-encode the asset and rewrite it with write_build_file (base64).' };
+  }
+  const abs = path.join(target.folder, file);
+  if (!fs.existsSync(abs)) return { modelText: `optimize_image failed: no file "${file}" in this build.` };
+  const maxPx = Math.min(4096, Math.max(64, Number(args.max_px) || 1024));
+  const locks = await locksFor(ctx.tokenId, target.buildId);
+  if (locks.find((l) => l.lockType === 'freeze')) {
+    return { modelText: 'optimize_image blocked: the operator froze this build. Nothing was written.' };
+  }
+  archiveVersion(sessionDirName(target.parentKey), target.buildId, target.folder);
+  const res = await resizePng(abs, maxPx);
+  if (!res.ok) return { modelText: `optimize_image: ${res.message}` };
+  const artifact = artifactFor(target.parentKey, target.buildId);
+  return {
+    modelText: `Optimized ${file}: ${res.message} · ${sizeLabel(res.bytesBefore ?? 0)} → ${sizeLabel(res.bytesAfter ?? 0)}. The previous state is in the version archive; the file path is unchanged — no reference updates needed.`,
+    artifact: artifact ?? undefined,
+  };
+}
+
+const OPTIMIZE_IMAGE_TOOL: ToolDefinition = {
+  name: 'optimize_image',
+  description:
+    'Downscale a PNG asset inside a build (canvas resample in the headless browser; never upscales, keeps alpha, writes the same path). Use for oversized artwork/photos before shipping or hosting — smaller pages, same visual result. PNG only; the previous version is archived automatically.',
+  parameters: {
+    type: 'object',
+    properties: {
+      build_id: { type: 'string', description: 'Build id from list_builds (defaults to the current build thread).' },
+      file: { type: 'string', description: 'Build-relative .png path, e.g. "assets/hero.png".' },
+      max_px: { type: 'integer', description: 'Longest-edge limit in pixels (default 1024, max 4096).' },
+    },
+    required: ['file'],
+  },
+  execute: optimizeImageTool,
+};
+
+/** request_decision — a question card for the operator (the gap only they can close). */
+function requestDecisionTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('request_decision', ctx);
+  if (deny) return deny;
+  const question = typeof args.question === 'string' ? args.question.trim() : '';
+  if (!question) return { modelText: 'request_decision rejected: "question" is required.' };
+  const rawOptions = Array.isArray(args.options) ? (args.options as unknown[]) : [];
+  const options = rawOptions.map((o) => String(o).trim()).filter(Boolean).slice(0, 4);
+  if (options.length < 2) {
+    return { modelText: 'request_decision rejected: provide 2–4 concrete options the operator can pick from.' };
+  }
+  return {
+    modelText:
+      `Decision card posted to the operator: "${clip(question, 160)}" — options: ${options.map((o) => `"${o}"`).join(' / ')}. ` +
+      'Their click arrives as your next message. End your turn with ONE short line saying what you need — do not continue as if it were already answered.',
+    decision: { question: question.slice(0, 400), options },
+  };
+}
+
+const REQUEST_DECISION_TOOL: ToolDefinition = {
+  name: 'request_decision',
+  description:
+    'Ask the OPERATOR to decide something only they can (extend the allowlist, provide an API key, confirm a canonical contract, pick between designs, approve a spend). Renders a card with 2–4 tappable options in the console; their click arrives as your next message. Use it instead of burying questions in prose — then stop; keep the closing line to what you need.',
+  parameters: {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: 'The decision, in one clear sentence.' },
+      options: { type: 'array', items: { type: 'string' }, description: '2–4 concrete choices.' },
+    },
+    required: ['question', 'options'],
+  },
+  execute: requestDecisionTool,
+};
+
 const TOOLS: ToolDefinition[] = [
   READ_LOOPER_TOOL,
+  READ_LOOPER_TRAITS_TOOL,
   LIST_BUILDS_TOOL,
   READ_BUILD_TOOL,
   LIST_BUILD_FILES_TOOL,
   SEARCH_HISTORY_TOOL,
+  SEARCH_BUILD_TOOL,
+  DIFF_BUILD_TOOL,
+  BUILD_STATUS_TOOL,
+  SNAPSHOT_BUILD_TOOL,
   LIST_LIBS_TOOL,
+  LIST_ALLOWLIST_TOOL,
+  JOB_STATUS_TOOL,
+  RUN_MODULE_TOOL,
+  PREPARE_DEPLOY_TOOL,
+  OPTIMIZE_IMAGE_TOOL,
+  REQUEST_DECISION_TOOL,
   CHECK_BUILD_TOOL,
   VERIFY_RENDER_TOOL,
   FETCH_CONTRACT_ABI_TOOL,
   READ_CONTRACT_TOOL,
   SIMULATE_CALL_TOOL,
   TX_STATUS_TOOL,
+  CONTRACT_EVIDENCE_TOOL,
   WEB_SEARCH_TOOL,
   WEB_FETCH_TOOL,
   LOOKUP_CONTRACT_TOOL,
@@ -2480,7 +3140,7 @@ const TOOLS: ToolDefinition[] = [
 const BUILD_THREAD_ONLY = new Set(['update_build', 'edit_build', 'write_build_file', 'delete_build_file']);
 
 /** The Telegram lane is READ-ONLY: the group is an untrusted surface (reads + sourced prices). */
-const TELEGRAM_READ_ONLY = new Set(['read_looper', 'recall', 'market_price']);
+const TELEGRAM_READ_ONLY = new Set(['read_looper', 'read_looper_traits', 'recall', 'market_price']);
 
 /** Tools offered to the model for a given surface. Only the operator console has hands. */
 export function toolSpecsForSurface(surface: ToolSurface, opts: { buildThread?: boolean } = {}): ToolSpec[] {

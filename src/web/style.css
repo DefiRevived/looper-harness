@@ -1831,3 +1831,55 @@ input:focus {
   padding: 12px 14px;
   border-top: 1px solid var(--border);
 }
+
+/* --- request_decision card (the agent asks the operator) --- */
+.decision-card {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  max-width: 560px;
+}
+
+.decision-q {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.decision-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.decision-opt {
+  padding: 5px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.decision-opt:hover:not(:disabled) {
+  border-color: var(--amber);
+}
+
+.decision-opt:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.decision-opt.chosen {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.decision-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--dim);
+}
