@@ -22,6 +22,11 @@ export const config = {
     baseUrl: env('DEEPSEEK_BASE_URL', 'https://api.deepseek.com').replace(/\/+$/, ''),
     model: env('DEEPSEEK_MODEL', 'deepseek-flash'),
     temperature: Number(env('DEEPSEEK_TEMPERATURE', '0.7')),
+    // Output ceiling for every LLM call. The provider DEFAULT is small enough
+    // to truncate a large tool call mid-JSON (which surfaces as 'unparseable
+    // arguments' and blinds the agent) — verified against DeepSeek: values up
+    // to 65536 are accepted. Env: LOOPER_MAX_OUTPUT_TOKENS.
+    maxOutputTokens: Math.max(1024, Number(env('LOOPER_MAX_OUTPUT_TOKENS', '32768')) || 32768),
   },
   telegramBotToken: env('TELEGRAM_BOT_TOKEN'),
   discordBotToken: env('DISCORD_BOT_TOKEN'),

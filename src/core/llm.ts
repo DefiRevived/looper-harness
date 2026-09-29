@@ -5,6 +5,10 @@ export interface ToolCall {
   id: string;
   type: 'function';
   function: { name: string; arguments: string };
+  /** Set when the provider cut the call short: the JSON args are INCOMPLETE. */
+  truncated?: boolean;
+  /** Why it was cut: 'ceiling' = hit the token limit · 'stream' = stream ended with no terminator. */
+  truncatedReason?: 'ceiling' | 'stream';
 }
 
 export interface ToolSpec {
@@ -31,6 +35,13 @@ export type StreamStep =
   | { type: 'tool_calls'; toolCalls: ToolCall[] };
 
 export type LlmMode = 'live' | 'mock';
+
+/**
+ * Some OpenAI-compatible endpoints reject max_tokens above their own ceiling.
+ * Asking too much must never break every call, so the first rejection turns
+ * the parameter off for the process (with a loud warning) and we carry on.
+ */
+let maxTokensSupported = true;
 
 export function llmMode(): LlmMode {
   return llmApiKey() ? 'live' : 'mock';
@@ -72,24 +83,41 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
   armIdle(90_000, 'LLM stream produced no data for 90s — aborted');
 
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${llmApiKey()}`,
-      },
-      body: JSON.stringify({
-        model: config.deepseek.model,
-        messages,
-        stream: true,
-        temperature: config.deepseek.temperature,
-        ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
-      }),
-      signal: ctrl.signal,
+    const requestBody = (): Record<string, unknown> => ({
+      model: config.deepseek.model,
+      messages,
+      stream: true,
+      temperature: config.deepseek.temperature,
+      // Explicit ceiling: without it the provider default applies and a large
+      // tool call (one build file) is cut off mid-JSON.
+      ...(maxTokensSupported ? { max_tokens: config.deepseek.maxOutputTokens } : {}),
+      ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
     });
+    const send = (): Promise<Response> =>
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${llmApiKey()}`,
+        },
+        body: JSON.stringify(requestBody()),
+        signal: ctrl.signal,
+      });
 
+    let res = await send();
+    let detail = '';
     if (!res.ok || !res.body) {
-      const detail = await res.text().catch(() => '');
+      detail = await res.text().catch(() => '');
+      if (maxTokensSupported && /max_tokens/i.test(detail)) {
+        maxTokensSupported = false;
+        console.warn(
+          '[llm] provider rejected max_tokens — retrying without it. Large tool calls may now truncate at the provider default.',
+        );
+        res = await send();
+        detail = res.ok ? '' : await res.text().catch(() => '');
+      }
+    }
+    if (!res.ok || !res.body) {
       throw new Error(`LLM request failed (${res.status}): ${detail.slice(0, 400) || 'no body'}`);
     }
 
@@ -99,6 +127,16 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
     let buffer = '';
     let finished = false;
     let lastCallProgress = 0;
+    // 'length' = the provider stopped at the output ceiling, not at a natural
+    // end: anything still streaming (esp. tool-call arguments) is INCOMPLETE.
+    let finishReason = '';
+    // Normal streams announce their own end (a finish_reason, then [DONE] —
+    // verified against the provider). A stream that ends with NEITHER was cut:
+    // whatever was in flight is incomplete. That is the case that used to reach
+    // the tool layer as "unparseable JSON", with nothing to act on.
+    let sawFinish = false;
+    let sawDone = false;
+    let streamedAny = false;
 
     while (!finished) {
       const { done, value } = await reader.read();
@@ -113,12 +151,14 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (payload === '[DONE]') {
+          sawDone = true;
           finished = true;
           break;
         }
         try {
           const parsed = JSON.parse(payload) as {
             choices?: Array<{
+              finish_reason?: string | null;
               delta?: {
                 content?: string;
                 reasoning_content?: string;
@@ -126,9 +166,17 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
               };
             }>;
           };
+          const choiceFr = parsed.choices?.[0]?.finish_reason;
+          if (choiceFr) {
+            finishReason = choiceFr;
+            sawFinish = true;
+          }
           const delta = parsed.choices?.[0]?.delta;
           if (delta?.reasoning_content) yield { type: 'reasoning', text: delta.reasoning_content };
-          if (delta?.content) yield { type: 'text', text: delta.content };
+          if (delta?.content) {
+            streamedAny = true;
+            yield { type: 'text', text: delta.content };
+          }
           for (const frag of delta?.tool_calls ?? []) {
             const idx = frag.index ?? 0;
             const acc = pending.get(idx) ?? { id: '', type: 'function' as const, function: { name: '', arguments: '' } };
@@ -157,10 +205,31 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
       }
     }
 
+    const cut = finishReason === 'length';
+    const abandoned = !sawFinish && !sawDone;
     if (pending.size > 0) {
+      const toolCalls = [...pending.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => call);
+      // Either way the arguments are incomplete: flag them so the executor can
+      // name the real cause instead of a parse error, and the model can re-issue
+      // in smaller pieces instead of burning the turn on the same oversized call.
+      if (cut || abandoned) {
+        for (const call of toolCalls) {
+          call.truncated = true;
+          call.truncatedReason = cut ? 'ceiling' : 'stream';
+        }
+      }
+      yield { type: 'tool_calls', toolCalls };
+    } else if (cut) {
+      // Text-only reply that hit the ceiling: say it out loud rather than let a
+      // half-written answer read as finished.
       yield {
-        type: 'tool_calls',
-        toolCalls: [...pending.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => call),
+        type: 'text',
+        text: "\n\n[output cut off at the provider's token ceiling — the reply above is incomplete]",
+      };
+    } else if (abandoned && streamedAny) {
+      yield {
+        type: 'text',
+        text: '\n\n[connection cut mid-reply — the text above is incomplete; re-run if it matters]',
       };
     }
   } finally {

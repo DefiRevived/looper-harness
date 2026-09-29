@@ -625,15 +625,40 @@ async function editBuild(args: Record<string, unknown>, ctx: ToolContext): Promi
   };
 }
 
-/** Shared by write_build_file / delete_build_file: resolve the thread's build folder + entry. */
-function threadBuildFolder(
+/**
+ * Resolve which build a tool acts on: the thread's build when called inside one,
+ * else an explicit `build_id`. Also accepts a bare timestamp or any unique id
+ * prefix — the model routinely quotes only the digits from list_builds, and
+ * answering that with "provide build_id" (when it did) sends it chasing a
+ * phantom bug instead of the real one.
+ */
+function resolveBuildTarget(
+  args: Record<string, unknown>,
   ctx: ToolContext,
-): { parentKey: string; buildId: string; folder: string; entry: { file: string; kind: 'html' | 'svg' } } | null {
-  const buildId = ctx.buildId;
-  const parentKey = parseBuildThread(ctx.sessionKey)?.parentKey;
-  if (!buildId || !parentKey || !BUILD_ID_RE.test(buildId)) return null;
+): { parentKey: string; buildId: string; folder: string; entry: { file: string; kind: 'html' | 'svg' } } | string {
+  const parentKey = parseBuildThread(ctx.sessionKey)?.parentKey ?? ctx.sessionKey;
+  const raw = typeof args.build_id === 'string' && args.build_id.trim() ? args.build_id.trim() : ctx.buildId;
+  if (!raw) {
+    return "no build specified — pass build_id (get exact ids from list_builds), or call this inside the build's own thread where it can be omitted.";
+  }
+  let buildId = raw;
+  if (!BUILD_ID_RE.test(buildId)) {
+    const dir = path.join(buildsRoot(), sessionDirName(parentKey));
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(dir).filter((n) => BUILD_ID_RE.test(n));
+    } catch {
+      names = [];
+    }
+    const hits = names.filter((n) => n.startsWith(raw + '-') || n === raw);
+    if (hits.length === 1) buildId = hits[0];
+    else if (hits.length === 0) return `no build matches "${raw}" for this operator — call list_builds and pass an exact id.`;
+    else {
+      return `build id "${raw}" is ambiguous (${hits.length} matches: ${hits.slice(0, 4).join(', ')}…) — pass the full id from list_builds.`;
+    }
+  }
   const entry = buildIndex(parentKey, buildId);
-  if (!entry) return null;
+  if (!entry) return `build ${buildId} not found. Call list_builds for valid ids.`;
   return { parentKey, buildId, folder: path.dirname(entry.file), entry };
 }
 
@@ -647,10 +672,8 @@ async function writeBuildFile(args: Record<string, unknown>, ctx: ToolContext): 
   if (ctx.surface !== 'web') {
     return { modelText: 'write_build_file is not available on this surface; reply in text instead.' };
   }
-  const target = threadBuildFolder(ctx);
-  if (!target) {
-    return { modelText: 'write_build_file failed: no build attached to this thread.' };
-  }
+  const target = resolveBuildTarget(args, ctx);
+  if (typeof target === 'string') return { modelText: `write_build_file failed: ${target}` };
   const { parentKey, buildId, folder } = target;
 
   const fileProblem = validateBuildFilePath(args.file);
@@ -736,10 +759,8 @@ async function deleteBuildFile(args: Record<string, unknown>, ctx: ToolContext):
   if (ctx.surface !== 'web') {
     return { modelText: 'delete_build_file is not available on this surface; reply in text instead.' };
   }
-  const target = threadBuildFolder(ctx);
-  if (!target) {
-    return { modelText: 'delete_build_file failed: no build attached to this thread.' };
-  }
+  const target = resolveBuildTarget(args, ctx);
+  if (typeof target === 'string') return { modelText: `delete_build_file failed: ${target}` };
   const { parentKey, buildId, folder, entry } = target;
 
   const fileProblem = validateBuildFilePath(args.file);
@@ -799,15 +820,11 @@ function listBuildFilesTool(args: Record<string, unknown>, ctx: ToolContext): To
   if (ctx.surface !== 'web') {
     return { modelText: 'list_build_files is not available on this surface; reply in text instead.' };
   }
-  const parentKey = parseBuildThread(ctx.sessionKey)?.parentKey ?? ctx.sessionKey;
-  const buildIdArg = typeof args.build_id === 'string' && args.build_id.trim() ? args.build_id.trim() : ctx.buildId;
-  const buildId = buildIdArg ?? '';
-  if (!BUILD_ID_RE.test(buildId)) {
-    return { modelText: 'list_build_files rejected: provide "build_id" (or call it inside the build\'s thread).' };
-  }
-  const entry = buildIndex(parentKey, buildId);
+  const target = resolveBuildTarget(args, ctx);
+  if (typeof target === 'string') return { modelText: `list_build_files failed: ${target}` };
+  const { parentKey, buildId, entry } = target;
   const files = buildFileList(parentKey, buildId);
-  if (!entry || !files) {
+  if (!files) {
     return { modelText: `list_build_files failed: build ${buildId} not found. Call list_builds for valid ids.` };
   }
   const entryRel = `index.${entry.kind}`;
@@ -836,15 +853,9 @@ function listBuildFilesTool(args: Record<string, unknown>, ctx: ToolContext): To
 
 /** Shared: resolve a build folder from a tool call (explicit build_id or the thread's build). */
 function resolveToolBuild(args: Record<string, unknown>, ctx: ToolContext): { parentKey: string; buildId: string; folder: string } | string {
-  const parentKey = parseBuildThread(ctx.sessionKey)?.parentKey ?? ctx.sessionKey;
-  const buildIdArg = typeof args.build_id === 'string' && args.build_id.trim() ? args.build_id.trim() : ctx.buildId;
-  const buildId = buildIdArg ?? '';
-  if (!BUILD_ID_RE.test(buildId)) {
-    return 'provide "build_id" (or call it inside the build\'s thread).';
-  }
-  const entry = buildIndex(parentKey, buildId);
-  if (!entry) return `build ${buildId} not found. Call list_builds for valid ids.`;
-  return { parentKey, buildId, folder: path.dirname(entry.file) };
+  const target = resolveBuildTarget(args, ctx);
+  if (typeof target === 'string') return target;
+  return { parentKey: target.parentKey, buildId: target.buildId, folder: target.folder };
 }
 
 /**
@@ -2039,10 +2050,11 @@ const EDIT_BUILD_TOOL: ToolDefinition = {
 const WRITE_BUILD_FILE_TOOL: ToolDefinition = {
   name: 'write_build_file',
   description:
-    "Create or replace ONE file in THIS build's project folder (whole-file write — the multi-file counterpart of update_build, which rewrites the entry document). Text files (html/css/js/mjs/json/svg/txt/md/csv) take plain content; binary files (png/jpg/jpeg/gif/webp/ico/woff2/woff/ttf) take base64 via encoding:'base64'. Link files with RELATIVE paths — they resolve inside the build folder. node_modules/ and dist/ are managed by the project toolchain and not writable here. Locks, size caps and the version archive apply like every write. Prefer edit_build for small changes to an existing text file.",
+    "Create or replace ONE file in a build's project folder (whole-file write — the multi-file counterpart of update_build, which rewrites the entry document). Text files (html/css/js/mjs/json/svg/txt/md/csv) take plain content; binary files (png/jpg/jpeg/gif/webp/ico/woff2/woff/ttf) take base64 via encoding:'base64'. Link files with RELATIVE paths — they resolve inside the build folder. node_modules/ and dist/ are managed by the project toolchain and not writable here. Locks, size caps and the version archive apply like every write. Prefer edit_build for small changes to an existing text file. HOW TO LAND A LARGE PROJECT: the model's output ceiling truncates any single call carrying a whole project, so scaffold the entry + package.json + config with render_artifact, then write ONE file per call here (keep each content under ~8KB) — pass build_id when you are not inside the build's thread.",
   parameters: {
     type: 'object',
     properties: {
+      build_id: { type: 'string', description: 'Build id from list_builds (or its bare timestamp). Omit inside the build\'s own thread.' },
       file: { type: 'string', description: 'Build-relative path, e.g. "css/style.css" or "assets/pixel.png".' },
       content: { type: 'string', description: 'Whole file content (plain text), or base64 for binary files.' },
       encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'utf8 (default, text files) or base64 (binary files only).' },
@@ -2055,10 +2067,11 @@ const WRITE_BUILD_FILE_TOOL: ToolDefinition = {
 const DELETE_BUILD_FILE_TOOL: ToolDefinition = {
   name: 'delete_build_file',
   description:
-    "Remove one non-entry file from THIS build's project folder (the entry document cannot be deleted — use delete_build for the whole build). Refused if a locked snippet lives in that file.",
+    "Remove one non-entry file from a build's project folder (the entry document cannot be deleted — use delete_build for the whole build). Refused if a locked snippet lives in that file.",
   parameters: {
     type: 'object',
     properties: {
+      build_id: { type: 'string', description: 'Build id from list_builds (or its bare timestamp). Omit inside the build\'s own thread.' },
       file: { type: 'string', description: 'Build-relative path to delete, e.g. "js/old-widget.js".' },
     },
     required: ['file'],
@@ -3101,7 +3114,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'render_artifact',
     description:
-      'Render a web build in the operator console preview panel as a live sandboxed preview: either a single self-contained document, or a SCAFFOLDED MULTI-FILE PROJECT (entry index.html + optional files[] like css/style.css, js/app.js, assets), or a REAL NPM PROJECT (package.json + vite build script + src/ files — then project_install + project_build; the built dist/ becomes the preview). Use for websites, landing pages, dapps, dashboards, diagrams, charts, logos, illustrations — anything visual. Link project files with RELATIVE paths (href="css/style.css") — they resolve inside the build folder. No external CDNs, no fetch()/XHR/WebSockets — the ONE sanctioned exception is the vendored local libraries under /libs/ (call list_libs for the inventory and exact <script src> usage). Use {{looper-image:TOKEN_ID}} to embed a Looper\'s REAL artwork — the server swaps in the actual image at serve time. The operator can open and download it. You still cannot see the pixels — but you CAN verify a build actually runs: call verify_render for a headless render report (JS errors, loads, blank-page check, screenshot for the operator). Never claim you saw or aesthetically judged a render.',
+      'Render a web build in the operator console preview panel as a live sandboxed preview: either a single self-contained document, or a SCAFFOLDED MULTI-FILE PROJECT (entry index.html + optional files[] like css/style.css, js/app.js, assets), or a REAL NPM PROJECT (package.json + vite build script + src/ files — then project_install + project_build; the built dist/ becomes the preview). Use for websites, landing pages, dapps, dashboards, diagrams, charts, logos, illustrations — anything visual. Link project files with RELATIVE paths (href="css/style.css") — they resolve inside the build folder. No external CDNs, no fetch()/XHR/WebSockets — the ONE sanctioned exception is the vendored local libraries under /libs/ (call list_libs for the inventory and exact <script src> usage). Use {{looper-image:TOKEN_ID}} to embed a Looper\'s REAL artwork — the server swaps in the actual image at serve time. The operator can open and download it. You still cannot see the pixels — but you CAN verify a build actually runs: call verify_render for a headless render report (JS errors, loads, blank-page check, screenshot for the operator). Never claim you saw or aesthetically judged a render. LARGE PROJECTS: keep this call SMALL — the model output ceiling truncates a whole project sent at once (the tool then receives broken JSON and nothing is written). Scaffold the entry + package.json + vite.config.js only, then add every other file with its own write_build_file call (one file per call, under ~8KB each). Never call render_artifact twice in one turn: every call creates a NEW build.',
     parameters: {
       type: 'object',
       properties: {
@@ -3146,7 +3159,7 @@ const TOOLS: ToolDefinition[] = [
 ];
 
 /** Build-thread-only tools: they need a buildId from the session key. */
-const BUILD_THREAD_ONLY = new Set(['update_build', 'edit_build', 'write_build_file', 'delete_build_file']);
+const BUILD_THREAD_ONLY = new Set(['update_build', 'edit_build']);
 
 /** The Telegram lane is READ-ONLY: the group is an untrusted surface (reads + sourced prices). */
 const TELEGRAM_READ_ONLY = new Set(['read_looper', 'read_looper_traits', 'recall', 'market_price']);
@@ -3170,11 +3183,29 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
   if (!tool) {
     return { modelText: `Unknown tool "${call.function.name}". Available: ${TOOLS.map((t) => t.name).join(', ') || 'none'}.` };
   }
+  if (call.truncated) {
+    const kb = ((call.function.arguments?.length ?? 0) / 1024).toFixed(1);
+    const cause =
+      call.truncatedReason === 'stream'
+        ? `the response stream ENDED EARLY — the provider never signalled the end of its turn, so the arguments are incomplete (about ${kb}KB arrived)`
+        : `its arguments were cut off at the model's output ceiling (${config.deepseek.maxOutputTokens} tokens; the JSON ended mid-value after about ${kb}KB)`;
+    return {
+      modelText:
+        `${call.function.name} NOT executed — ${cause}. Nothing was written and nothing changed. ` +
+        'Re-issue it in SMALLER pieces: one file per call, keeping each content under ~8KB. For a project, scaffold with render_artifact (entry + package.json + config only), then add every other file with its own write_build_file call (pass build_id when you are not inside that build\'s thread). ' +
+        'A whole multi-file project in a single call is the exact payload shape that gets cut — and a failed call is never a partial write: nothing lands.',
+    };
+  }
   let args: Record<string, unknown> = {};
   try {
     args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
   } catch {
-    return { modelText: `Tool ${call.function.name} received unparseable JSON arguments; retry with valid JSON.` };
+    const kb = ((call.function.arguments?.length ?? 0) / 1024).toFixed(1);
+    return {
+      modelText:
+        `Tool ${call.function.name} received unparseable JSON arguments (~${kb}KB); retry with valid JSON. ` +
+        'If the arguments were large, the output ceiling probably truncated them — split the work into smaller calls (one file per write, ~8KB each).',
+    };
   }
   try {
     return await tool.execute(args, ctx);

@@ -169,6 +169,16 @@ apiRouter.get('/artifact/:session/:id{/*rest}', async (req, res) => {
   }
   const file = resolveBuildPath(folder, splatToRel((req.params as Record<string, unknown>).rest));
   if (!file) {
+    // A REAL npm project serves its BUILT dist/ — an unbuilt project is not a
+    // missing file, and saying which it is is the difference between a fixable
+    // error and a mystery. Say exactly what has to run.
+    if (isProjectFolder(folder) && !fs.existsSync(path.join(folder, 'dist'))) {
+      res.status(404).json({
+        error: 'project not built yet',
+        detail: 'This is a REAL npm project: the preview serves its built dist/ folder, which does not exist yet. Run project_install, then project_build (or ask the agent to), then reload.',
+      });
+      return;
+    }
     res.status(404).json({ error: 'artifact file not found' });
     return;
   }
