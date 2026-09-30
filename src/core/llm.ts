@@ -32,7 +32,12 @@ export type StreamStep =
   // While the model composes a (possibly huge) tool call, nothing else streams
   // — these throttled pulses keep the console honest about what is happening.
   | { type: 'tool_progress'; name: string; argsChars: number }
-  | { type: 'tool_calls'; toolCalls: ToolCall[] };
+  | { type: 'tool_calls'; toolCalls: ToolCall[] }
+  // The reply was CUT before it finished (provider token ceiling, or a stream
+  // that ended with no terminator) and no tool call was in flight. Tool calls
+  // are marked `truncated` instead; this is the text-only case, and callers MUST
+  // NOT treat it as a finished answer.
+  | { type: 'truncated'; reason: 'ceiling' | 'stream'; textChars: number; reasoningChars: number };
 
 export type LlmMode = 'live' | 'mock';
 
@@ -137,6 +142,8 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
     let sawFinish = false;
     let sawDone = false;
     let streamedAny = false;
+    let streamedTextChars = 0;
+    let reasoningChars = 0;
 
     while (!finished) {
       const { done, value } = await reader.read();
@@ -172,9 +179,13 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
             sawFinish = true;
           }
           const delta = parsed.choices?.[0]?.delta;
-          if (delta?.reasoning_content) yield { type: 'reasoning', text: delta.reasoning_content };
+          if (delta?.reasoning_content) {
+            reasoningChars += delta.reasoning_content.length;
+            yield { type: 'reasoning', text: delta.reasoning_content };
+          }
           if (delta?.content) {
             streamedAny = true;
+            streamedTextChars += delta.content.length;
             yield { type: 'text', text: delta.content };
           }
           for (const frag of delta?.tool_calls ?? []) {
@@ -219,17 +230,18 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
         }
       }
       yield { type: 'tool_calls', toolCalls };
-    } else if (cut) {
-      // Text-only reply that hit the ceiling: say it out loud rather than let a
-      // half-written answer read as finished.
+    } else if (cut || (abandoned && streamedAny)) {
+      // No tool call in flight, so there is nothing to mark: report the cut as a
+      // STRUCTURED step and let the caller decide. The console continues the
+      // turn (a cut reply is not an answer); the bot lanes render it as text;
+      // completeReply keeps an honest marker. Note reasoningChars — a reply that
+      // burns the whole budget "thinking" arrives with almost no text, which is
+      // exactly the failure this replaced.
       yield {
-        type: 'text',
-        text: "\n\n[output cut off at the provider's token ceiling — the reply above is incomplete]",
-      };
-    } else if (abandoned && streamedAny) {
-      yield {
-        type: 'text',
-        text: '\n\n[connection cut mid-reply — the text above is incomplete; re-run if it matters]',
+        type: 'truncated',
+        reason: cut ? 'ceiling' : 'stream',
+        textChars: streamedTextChars,
+        reasoningChars,
       };
     }
   } finally {
@@ -242,6 +254,8 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
 export async function* streamReply(messages: ChatMessage[], opts?: { signal?: AbortSignal }): AsyncGenerator<string> {
   for await (const step of streamSteps(messages, undefined, opts)) {
     if (step.type === 'text') yield step.text;
+    // A cut reply must never read as complete in a text-only lane.
+    else if (step.type === 'truncated') yield '\n\n[output cut off at the model output ceiling — incomplete]';
   }
 }
 

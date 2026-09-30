@@ -171,6 +171,11 @@ export type AgentEvent =
  */
 const IDENTICAL_ROUND_LIMIT = 3;
 
+/** How many times a CUT reply may be continued before the turn gives up honestly. */
+const MAX_CONTINUATIONS = 2;
+/** Shown when a reply was cut and could not be continued — never pretend it finished. */
+const CUT_MARKER = '[output cut off at the model output ceiling — the reply above is incomplete]';
+
 /** Cheap fingerprint of a round's calls — same calls twice means 'stuck', not 'working'. */
 function callSignature(calls: ToolCall[]): string {
   return calls
@@ -340,6 +345,7 @@ export async function* streamAgentReplyWithTools(
   let budgetSpent = false;
   let lastCallSignature = '';
   let repeats = 0;
+  let continuations = 0;
   // Projects this turn touched, and whether the gate already ran (once per turn).
   const dirtyFolders = new Map<string, number>();
   let gateDone = false;
@@ -439,6 +445,7 @@ export async function* streamAgentReplyWithTools(
     for (let round = 0; ; round++) {
       let roundText = '';
       let pendingCalls: ToolCall[] = [];
+      let cutText = false;
       for await (const step of streamSteps(messages, specs.length ? specs : undefined, opts)) {
         if (step.type === 'text') {
           roundText += step.text;
@@ -450,6 +457,10 @@ export async function* streamAgentReplyWithTools(
           yield { type: 'tool_progress', name: step.name, argsChars: step.argsChars };
         } else if (step.type === 'tool_calls') {
           pendingCalls = step.toolCalls;
+        } else if (step.type === 'truncated') {
+          // Cut mid-generation. Tool calls in flight are already marked; a
+          // text-only cut means this reply is NOT an answer.
+          cutText = true;
         }
       }
       // Degenerate-loop guard: identical calls repeated means stuck, not building.
@@ -461,6 +472,26 @@ export async function* streamAgentReplyWithTools(
         break;
       }
       if (pendingCalls.length === 0) {
+        // A reply that was CUT is not an answer: continue the turn instead of
+        // letting a half-finished message end it. Bounded, so a model that keeps
+        // over-running cannot loop forever — and the nudge tells it to stop
+        // deliberating and act, which is what actually burned the budget.
+        if (cutText && continuations < MAX_CONTINUATIONS) {
+          continuations += 1;
+          messages.push({ role: 'assistant', content: roundText });
+          messages.push({
+            role: 'user',
+            content:
+              '(system note for this turn only — not from the operator: your previous output was CUT OFF at the model output ceiling mid-generation, so it was never finished. Continue from exactly where you stopped. Stop deliberating and ACT: be concise, do not restate what you already wrote, and if your plan is long, do its first steps now.)',
+          });
+          continue;
+        }
+        if (cutText) {
+          // Out of continuations: say it in the transcript rather than let a
+          // half-written answer read as complete.
+          full += `\n\n${CUT_MARKER}`;
+          yield { type: 'delta', text: `\n\n${CUT_MARKER}` };
+        }
         const gate = yield* runGate();
         if (!gate.ran) break;
         continue; // let the model react to the build result
@@ -537,6 +568,9 @@ export async function* streamAgentReplyWithTools(
           yield { type: 'delta', text: step.text };
         } else if (step.type === 'reasoning') {
           yield { type: 'thought', text: step.text };
+        } else if (step.type === 'truncated') {
+          full += `\n\n${CUT_MARKER}`;
+          yield { type: 'delta', text: `\n\n${CUT_MARKER}` };
         }
       }
       if (full.length === before) {
@@ -551,6 +585,9 @@ export async function* streamAgentReplyWithTools(
             yield { type: 'delta', text: step.text };
           } else if (step.type === 'reasoning') {
             yield { type: 'thought', text: step.text };
+          } else if (step.type === 'truncated') {
+            full += `\n\n${CUT_MARKER}`;
+            yield { type: 'delta', text: `\n\n${CUT_MARKER}` };
           }
         }
       }
@@ -598,6 +635,8 @@ export async function agentReplyWithTools(
         full += step.text;
       } else if (step.type === 'tool_calls') {
         pendingCalls = step.toolCalls;
+      } else if (step.type === 'truncated') {
+        full += `\n\n${CUT_MARKER}`;
       }
     }
     const signature = callSignature(pendingCalls);
@@ -622,6 +661,7 @@ export async function agentReplyWithTools(
     // One tools-free closing round (same rationale as the streaming path).
     for await (const step of streamSteps(messages)) {
       if (step.type === 'text') full += step.text;
+      else if (step.type === 'truncated') full += `\n\n${CUT_MARKER}`;
     }
   }
 
