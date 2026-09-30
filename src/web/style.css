@@ -1911,3 +1911,25 @@ input:focus {
   font-size: 11px;
   color: var(--dim);
 }
+
+/* --- projects: the operator's own rooms ------------------------------------- */
+.layout-projects { display: block; padding: 24px clamp(12px, 3vw, 32px); }
+.projects-panel { max-width: 980px; margin: 0 auto; }
+.projects-panel .panel-note { flex: 1; color: var(--dim, #5f7186); font-size: 11px; letter-spacing: 0.04em; }
+.project-form { display: grid; gap: 8px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line, #1b2a3d); border-radius: 8px; background: rgba(255, 255, 255, 0.02); }
+.project-form.hidden { display: none; }
+.project-form input,
+.project-form textarea { width: 100%; background: #0b1220; color: var(--fg, #cfe3f5); border: 1px solid var(--line, #1b2a3d); border-radius: 6px; padding: 8px 10px; font: 13px/1.5 var(--mono, ui-monospace, monospace); resize: vertical; }
+.project-form-actions { display: flex; gap: 8px; }
+.projects-list { display: grid; gap: 12px; }
+.project-card { border: 1px solid var(--line, #1b2a3d); border-radius: 10px; padding: 14px; background: rgba(255, 255, 255, 0.02); }
+.project-card.active { border-color: var(--phosphor, #6ef7c0); }
+.project-card-head { display: flex; align-items: center; gap: 10px; }
+.project-card-head strong { font-size: 14px; letter-spacing: 0.04em; }
+.project-goal { margin: 8px 0 4px; color: var(--fg, #cfe3f5); font-size: 13px; }
+.project-meta { margin: 0 0 10px; color: var(--dim, #5f7186); font-size: 11px; }
+.project-actions { display: flex; gap: 8px; }
+.project-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 0 0 8px; border: 1px solid var(--line, #1b2a3d); border-radius: 8px; background: rgba(110, 247, 192, 0.06); font-size: 12px; }
+.project-bar.hidden { display: none; }
+.pb-chip { font-size: 10px; letter-spacing: 0.14em; color: var(--phosphor, #6ef7c0); border: 1px solid currentColor; border-radius: 999px; padding: 1px 7px; }
+.pb-goal { flex: 1; color: var(--dim, #5f7186); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

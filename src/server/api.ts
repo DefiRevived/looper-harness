@@ -10,6 +10,7 @@ import { llmMode } from '../core/llm.js';
 import { fetchArweave } from '../core/arweave.js';
 import { resolveLooperImages } from '../core/looperAssets.js';
 import { activeJobFor, buildWarnings, isProjectFolder, lastJobFor, projectBuild, projectDistInfo, projectInstall } from '../core/projects.js';
+import { createProject, deleteProject, listProjects, projectSessionKey, updateProject } from '../core/projectSpace.js';
 import { streamAgentReply, streamAgentReplyWithTools } from '../core/brain.js';
 import { buildFolderFor, isBuildId, listArtifacts, parseBuildThread, revertBuild, sessionDirName } from '../core/tools.js';
 import { distillMessages, labelFor } from '../core/episodes.js';
@@ -584,6 +585,57 @@ apiRouter.post('/chat/reset', (req, res) => {
     }
   }
   res.json({ ok: true });
+});
+
+// --- projects: first-class rooms to build in --------------------------------
+// A project owns a PRIVATE session key, so its chat and its builds are namespaced
+// away from every other chat, and the agent inside one is given no memory of the
+// rest (brain.ts injects a project directive instead of recollection).
+
+apiRouter.get('/projects', (req, res) => {
+  const tokenId = parseTokenId(req.query.tokenId);
+  if (!requireToken(res, tokenId)) return;
+  const projects = listProjects(tokenId).map((p) => ({
+    ...p,
+    builds: listArtifacts(projectSessionKey(tokenId, p.id)).length,
+  }));
+  res.json({ projects });
+});
+
+apiRouter.post('/projects', (req, res) => {
+  const body = (req.body ?? {}) as { tokenId?: unknown; title?: unknown; goal?: unknown };
+  const tokenId = parseTokenId(body.tokenId);
+  if (!requireToken(res, tokenId)) return;
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
+  if (!title) {
+    res.status(400).json({ error: 'a project needs a title' });
+    return;
+  }
+  const project = createProject(tokenId, title, typeof body.goal === 'string' ? body.goal : '');
+  res.json({ project: { ...project, builds: 0 }, sessionKey: projectSessionKey(tokenId, project.id) });
+});
+
+apiRouter.post('/projects/update', (req, res) => {
+  const body = (req.body ?? {}) as { tokenId?: unknown; id?: unknown; title?: unknown; goal?: unknown };
+  const tokenId = parseTokenId(body.tokenId);
+  if (!requireToken(res, tokenId)) return;
+  const id = typeof body.id === 'string' ? body.id : '';
+  const project = updateProject(tokenId, id, {
+    title: typeof body.title === 'string' ? body.title : undefined,
+    goal: typeof body.goal === 'string' ? body.goal : undefined,
+  });
+  if (!project) {
+    res.status(404).json({ error: 'project not found' });
+    return;
+  }
+  res.json({ project });
+});
+
+apiRouter.post('/projects/delete', (req, res) => {
+  const body = (req.body ?? {}) as { tokenId?: unknown; id?: unknown };
+  const tokenId = parseTokenId(body.tokenId);
+  if (!requireToken(res, tokenId)) return;
+  res.json({ removed: deleteProject(tokenId, typeof body.id === 'string' ? body.id : '') });
 });
 
 apiRouter.post('/chat', chatRateLimit, async (req, res) => {

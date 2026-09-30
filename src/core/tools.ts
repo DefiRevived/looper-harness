@@ -3204,18 +3204,17 @@ const TOOLS: ToolDefinition[] = [
 const BUILD_THREAD_ONLY = new Set(['update_build', 'edit_build']);
 
 /**
- * Hidden in a FRESH session: recollection and prior-work inspection. "No memory"
- * has to be mechanical, not a polite request — the build tools resolve inside the
- * session's own directory anyway, so this closes the last readable path to work
- * the operator asked it to forget.
+ * Hidden inside a PROJECT chat: cross-chat recollection. A project keeps its own
+ * gallery and its own build state, but must not drag in memory of other work —
+ * that pull is what made two "surprise me" projects converge on one idea.
  */
-const FRESH_HIDDEN = new Set(['recall', 'lessons', 'list_builds', 'read_build', 'search_build', 'diff_build', 'build_status', 'list_versions', 'revert_build']);
+const PROJECT_HIDDEN = new Set(['recall', 'lessons']);
 
 /** The Telegram lane is READ-ONLY: the group is an untrusted surface (reads + sourced prices). */
 const TELEGRAM_READ_ONLY = new Set(['read_looper', 'read_looper_traits', 'recall', 'market_price']);
 
 /** Tools offered to the model for a given surface. Only the operator console has hands. */
-export function toolSpecsForSurface(surface: ToolSurface, opts: { buildThread?: boolean; fresh?: boolean } = {}): ToolSpec[] {
+export function toolSpecsForSurface(surface: ToolSurface, opts: { buildThread?: boolean; project?: boolean } = {}): ToolSpec[] {
   const toSpec = (tool: ToolDefinition): ToolSpec => ({
     type: 'function',
     function: { name: tool.name, description: tool.description, parameters: tool.parameters },
@@ -3225,7 +3224,7 @@ export function toolSpecsForSurface(surface: ToolSurface, opts: { buildThread?: 
   }
   if (surface !== 'web') return [];
   let tools = opts.buildThread ? TOOLS : TOOLS.filter((tool) => !BUILD_THREAD_ONLY.has(tool.name));
-  if (opts.fresh) tools = tools.filter((tool) => !FRESH_HIDDEN.has(tool.name));
+  if (opts.project) tools = tools.filter((tool) => !PROJECT_HIDDEN.has(tool.name));
   return tools.map(toSpec);
 }
 

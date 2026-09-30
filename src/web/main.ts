@@ -67,7 +67,19 @@ const chatForm = $<HTMLFormElement>('chat-form');
 const chatInput = $<HTMLInputElement>('chat-input');
 const chatSend = $<HTMLButtonElement>('chat-send');
 const chatReset = $<HTMLButtonElement>('chat-reset');
-const chatFresh = $<HTMLButtonElement>('chat-fresh');
+const viewProjects = $<HTMLElement>('view-projects');
+const projectsList = $<HTMLDivElement>('projects-list');
+const projectsEmpty = $<HTMLParagraphElement>('projects-empty');
+const projectsNew = $<HTMLButtonElement>('projects-new');
+const projectsRefresh = $<HTMLButtonElement>('projects-refresh');
+const projectForm = $<HTMLFormElement>('project-form');
+const projectTitleInput = $<HTMLInputElement>('project-title');
+const projectGoalInput = $<HTMLTextAreaElement>('project-goal');
+const projectCancel = $<HTMLButtonElement>('project-cancel');
+const projectBar = $<HTMLDivElement>('project-bar');
+const projectBarTitle = $<HTMLElement>('project-bar-title');
+const projectBarGoal = $<HTMLElement>('project-bar-goal');
+const projectBarExit = $<HTMLButtonElement>('project-bar-exit');
 const chatStop = $<HTMLButtonElement>('chat-stop');
 const helixaCredEl = $<HTMLDivElement>('helixa-cred');
 const artifactsList = $<HTMLDivElement>('artifacts-list');
@@ -152,18 +164,19 @@ const setupKeyStatus = $<HTMLParagraphElement>('setup-key-status');
 const toastEl = $<HTMLDivElement>('toast');
 const buildCards = new Map<string, HTMLElement>();
 let unseenBuilds = 0;
-type View = 'console' | 'builds' | 'ledger' | 'memory' | 'archive';
+type View = 'projects' | 'console' | 'builds' | 'ledger' | 'memory' | 'archive';
 let currentView: View = 'console';
 
 // Namespaced keys: the fork must never read or overwrite the sibling
 // looperagent console's `looper.token`, even when both share an origin.
 const storedToken = Number(localStorage.getItem('looper-harness.token') ?? '');
 let tokenId = Number.isInteger(storedToken) && storedToken >= 1 ? storedToken : 0;
-// A FRESH chat is just a different session key — history and builds are
-// namespaced per key, so a fresh key also starts with an empty gallery. Stored
-// per token and cleared by clicking "← main chat".
-const freshKeyFor = (token: number): string => (token ? localStorage.getItem(`looper-harness.fresh.${token}`) ?? '' : '');
-let sessionKey = freshKeyFor(tokenId) || `web:${tokenId}`;
+// A PROJECT is a private room: its own session key, so its chat and its builds
+// live under it and nothing from your other chats is reachable from inside it.
+// Stored per token; “← main chat” clears it.
+const activeProjectFor = (token: number): string => (token ? localStorage.getItem(`looper-harness.project.${token}`) ?? '' : '');
+let activeProjectId = activeProjectFor(tokenId);
+let sessionKey = activeProjectId ? `web:${tokenId}:proj:${activeProjectId}` : `web:${tokenId}`;
 let streaming = false;
 let activeAbort: AbortController | null = null;
 
@@ -1235,6 +1248,7 @@ function switchView(view: View): void {
   viewLedger.classList.toggle('hidden', view !== 'ledger');
   viewMemory.classList.toggle('hidden', view !== 'memory');
   viewArchive.classList.toggle('hidden', view !== 'archive');
+  viewProjects.classList.toggle('hidden', view !== 'projects');
   for (const tab of document.querySelectorAll<HTMLButtonElement>('.view-tab')) {
     tab.classList.toggle('active', tab.dataset.view === view);
   }
@@ -1242,6 +1256,7 @@ function switchView(view: View): void {
     unseenBuilds = 0;
     buildsBadge.classList.add('hidden');
   }
+  if (view === 'projects') void loadProjects();
   if (view === 'ledger') void loadLedger();
   if (view === 'memory') void loadMemoryView();
   if (view === 'archive') void loadArchive();
@@ -2194,26 +2209,146 @@ chatReset.addEventListener('click', async () => {
   void loadActivity();
 });
 
-// ✚ fresh chat — a session with NO memory: no episodes, no lessons, no build
-// state or failing-build list, no prior-work inspection (the recollection tools
-// are hidden for it server-side), and a randomly drawn creative brief so two
-// fresh chats cannot converge on the same idea. The reload is deliberate: boot
-// re-reads the stored key and loads that session's (empty) history.
-function renderFreshLabel(): void {
-  const active = Boolean(freshKeyFor(tokenId));
-  chatFresh.textContent = active ? '← main chat' : '✚ fresh chat';
-  chatFresh.title = active
-    ? 'Leave this memory-free chat and go back to the main console thread'
-    : 'Start a chat with no memory of anything before it';
+/**
+ * Projects — the operator's own rooms. Creating one opens a chat whose session
+ * key is private to it: the server injects no memory of other chats, hides the
+ * recollection tools, and every build it makes lands in its own gallery. The
+ * project keeps its chat, its builds and its own distilled episodes, so it can
+ * be revisited and expanded weeks later.
+ */
+interface ProjectInfo {
+  id: string;
+  title: string;
+  goal: string;
+  createdAt: number;
+  updatedAt: number;
+  builds: number;
 }
-chatFresh.addEventListener('click', () => {
+
+let activeProject: ProjectInfo | null = null;
+
+async function loadProjects(): Promise<void> {
   if (!tokenId) return;
-  const key = `looper-harness.fresh.${tokenId}`;
-  if (localStorage.getItem(key)) localStorage.removeItem(key);
-  else localStorage.setItem(key, `web:${tokenId}:fresh:${Date.now().toString(36)}`);
+  try {
+    const { projects } = await getJson<{ projects: ProjectInfo[] }>(`/api/projects?tokenId=${tokenId}`);
+    activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+    renderProjects(projects);
+    renderProjectBar();
+  } catch {
+    projectsList.innerHTML = '';
+    projectsEmpty.textContent = 'could not load projects';
+    projectsEmpty.classList.remove('hidden');
+  }
+}
+
+function renderProjects(projects: ProjectInfo[]): void {
+  projectsList.innerHTML = '';
+  projectsEmpty.classList.toggle('hidden', projects.length > 0);
+  for (const p of projects) {
+    const card = document.createElement('article');
+    card.className = `project-card${p.id === activeProjectId ? ' active' : ''}`;
+
+    const head = document.createElement('div');
+    head.className = 'project-card-head';
+    const title = document.createElement('strong');
+    title.textContent = p.title;
+    const count = document.createElement('span');
+    count.className = 'chip chip-dim';
+    count.textContent = `${p.builds} build${p.builds === 1 ? '' : 's'}`;
+    head.append(title, count);
+
+    const goal = document.createElement('p');
+    goal.className = 'project-goal';
+    goal.textContent = p.goal || '(no goal stated) — tell the agent what it is on entry';
+
+    const meta = document.createElement('p');
+    meta.className = 'project-meta';
+    meta.textContent = `last activity ${new Date(p.updatedAt).toLocaleString()} · created ${new Date(p.createdAt).toLocaleDateString()}`;
+
+    const actions = document.createElement('div');
+    actions.className = 'project-actions';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'btn';
+    open.textContent = p.id === activeProjectId ? 'currently open' : 'open chat';
+    open.addEventListener('click', () => openProject(p.id));
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'btn btn-ghost';
+    edit.textContent = 'edit';
+    edit.addEventListener('click', () => {
+      projectForm.classList.remove('hidden');
+      projectForm.dataset.editing = p.id;
+      projectTitleInput.value = p.title;
+      projectGoalInput.value = p.goal;
+      projectTitleInput.focus();
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn-ghost';
+    remove.textContent = 'remove';
+    remove.addEventListener('click', async () => {
+      if (!confirm(`Remove project “${p.title}” from the list? Its chat and builds stay on disk.`)) return;
+      await postJson('/api/projects/delete', { tokenId, id: p.id });
+      if (activeProjectId === p.id) {
+        localStorage.removeItem(`looper-harness.project.${tokenId}`);
+        activeProjectId = '';
+      }
+      await loadProjects();
+    });
+    actions.append(open, edit, remove);
+    card.append(head, goal, meta, actions);
+    projectsList.append(card);
+  }
+}
+
+function openProject(id: string): void {
+  localStorage.setItem(`looper-harness.project.${tokenId}`, id);
   location.reload();
+}
+
+function exitProject(): void {
+  localStorage.removeItem(`looper-harness.project.${tokenId}`);
+  location.reload();
+}
+
+function renderProjectBar(): void {
+  projectBar.classList.toggle('hidden', !activeProjectId);
+  if (!activeProjectId) return;
+  projectBarTitle.textContent = activeProject?.title ?? activeProjectId;
+  projectBarGoal.textContent = activeProject?.goal || 'no goal stated — give the agent one line of direction';
+}
+
+projectsNew.addEventListener('click', () => {
+  projectForm.classList.remove('hidden');
+  delete projectForm.dataset.editing;
+  projectTitleInput.value = '';
+  projectGoalInput.value = '';
+  projectTitleInput.focus();
 });
-renderFreshLabel();
+projectCancel.addEventListener('click', () => projectForm.classList.add('hidden'));
+projectForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!tokenId) return;
+  const title = projectTitleInput.value.trim();
+  if (!title) {
+    projectTitleInput.focus();
+    return;
+  }
+  const editing = projectForm.dataset.editing;
+  if (editing) {
+    await postJson('/api/projects/update', { tokenId, id: editing, title, goal: projectGoalInput.value });
+    projectForm.classList.add('hidden');
+    delete projectForm.dataset.editing;
+    await loadProjects();
+    return;
+  }
+  const created = await postJson<{ project?: ProjectInfo }>('/api/projects', { tokenId, title, goal: projectGoalInput.value });
+  if (created.project?.id) openProject(created.project.id);
+});
+projectsRefresh.addEventListener('click', () => void loadProjects());
+projectBarExit.addEventListener('click', exitProject);
+renderProjectBar();
 
 vitalsRefresh.addEventListener('click', () => void loadVitals());
 activityRefresh.addEventListener('click', () => void loadActivity());
@@ -2607,8 +2742,13 @@ window.addEventListener('message', (event) => {
 });
 
 function startConsole(): void {
-  if (tokenId) void activate(tokenId).then(() => renderFreshLabel());
-  else showActivation();
+  if (tokenId) {
+    void activate(tokenId);
+    // Projects load with the console so the project bar (and the list) are ready.
+    void loadProjects();
+  } else {
+    showActivation();
+  }
 }
 
 async function boot(): Promise<void> {

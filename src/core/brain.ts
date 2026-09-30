@@ -13,7 +13,7 @@ import { libSummary } from './libs.js';
 import { allowlistSummary, verifyBuilds } from './projects.js';
 import { buildOutcomeLine, failingBuilds, lastBuildOutcome } from './buildState.js';
 import { lessonLines, recentLessons } from './lessons.js';
-import { freshDirective, isFreshSession } from './fresh.js';
+import { getProject, isProjectSession, projectDirective, projectIdOf, touchProject } from './projectSpace.js';
 import { listVersions } from './versions.js';
 import * as store from './store.js';
 
@@ -203,7 +203,7 @@ const PROJECT_WRITE_TOOLS = new Set(['write_build_file', 'delete_build_file', 'e
  * and one from the agent's own earlier turn. Either way the model starts the
  * turn already knowing what is broken instead of being told twice.
  */
-function buildStateNote(sessionKey: string, build: { parentKey: string; buildId: string } | null): string {
+function buildStateNote(sessionKey: string, build: { parentKey: string; buildId: string } | null, opts: { lessons: boolean } = { lessons: true }): string {
   const parts: string[] = [];
   if (build) {
     const folder = buildFolderFor(build.parentKey, build.buildId);
@@ -220,8 +220,11 @@ function buildStateNote(sessionKey: string, build: { parentKey: string; buildId:
     }
   }
   // Lessons earned from this harness's own past failures — cheap, high-yield,
-  // and nothing else was carrying them forward.
-  const lessons = recentLessons(2);
+  // and nothing else was carrying them forward. Withheld inside a PROJECT chat:
+  // ambient craft lessons from other work are exactly the pull that made two
+  // "surprise me" projects converge. (A lesson still arrives WITH a matching
+  // build error, which is when it is useful rather than suggestive.)
+  const lessons = opts.lessons ? recentLessons(2) : [];
   if (lessons.length) {
     parts.push(`LESSONS FROM YOUR OWN PAST FIXES (distilled from real build failures):\n${lessons.map((l) => `- ${l.text}`).join('\n')}`);
   }
@@ -330,20 +333,22 @@ export async function* streamAgentReplyWithTools(
 ): AsyncGenerator<AgentEvent> {
   const build = parseBuildThread(sessionKey);
   const ctx: ToolContext = { sessionKey, surface, tokenId, buildId: build?.buildId };
-  // A FRESH session gets no recollection at all: no measured build state, no
-  // lessons, no episodes, no prior-work inspection — plus a randomly drawn brief
-  // so two fresh chats cannot converge on the same idea or palette.
-  const fresh = isFreshSession(sessionKey);
-  const specs = toolSpecsForSurface(surface, { buildThread: build !== null, fresh });
-  const stateNote = fresh ? '' : buildStateNote(sessionKey, build);
-  const freshNote = fresh ? freshDirective(sessionKey) : '';
+  // A PROJECT chat is isolated: no recollection of other chats, no ambient
+  // lessons, no other project's build state. Its own gallery and its own failing
+  // builds stay visible, because that IS the project's own memory.
+  const projectId = isProjectSession(sessionKey) ? projectIdOf(sessionKey) : null;
+  const project = projectId ? getProject(tokenId, projectId) : null;
+  if (project) touchProject(tokenId, project.id);
+  const specs = toolSpecsForSurface(surface, { buildThread: build !== null, project: Boolean(project) });
+  const stateNote = buildStateNote(sessionKey, build, { lessons: !project });
+  const projectNote = project ? projectDirective(project) : '';
   const extraContext =
     [
       build
         ? await buildThreadContext(tokenId, build.parentKey, build.buildId, readBuildSource(build.parentKey, build.buildId))
         : '',
       stateNote,
-      freshNote,
+      projectNote,
     ]
       .filter(Boolean)
       .join('\n\n') || undefined;

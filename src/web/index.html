@@ -69,6 +69,7 @@
         <span class="brand-sub">// helixa codex runtime</span>
       </div>
       <nav class="view-tabs">
+        <button class="view-tab" data-view="projects" type="button">projects</button>
         <button class="view-tab active" data-view="console" type="button">console</button>
         <button class="view-tab" data-view="builds" type="button">builds<span class="tab-badge hidden" id="builds-badge">0</span></button>
         <button class="view-tab" data-view="ledger" type="button">ledger<span class="tab-badge hidden" id="ledger-badge">0</span></button>
@@ -125,8 +126,13 @@
       <section class="panel chat-panel">
         <div class="panel-head">
           <h2>COMMS</h2>
-          <button id="chat-fresh" class="btn btn-ghost" type="button" title="Start a chat with no memory of anything before it">✚ fresh chat</button>
           <button id="chat-reset" class="btn btn-ghost" type="button">reset thread</button>
+        </div>
+        <div id="project-bar" class="project-bar hidden">
+          <span class="pb-chip">PROJECT</span>
+          <strong id="project-bar-title">—</strong>
+          <span class="pb-goal" id="project-bar-goal"></span>
+          <button id="project-bar-exit" class="btn btn-ghost" type="button">← main chat</button>
         </div>
         <div class="chat-log" id="chat-log"></div>
         <form class="chat-form" id="chat-form">
@@ -154,6 +160,27 @@
           <div class="activity-list" id="activity-list"></div>
         </section>
       </aside>
+    </main>
+
+    <main class="layout-projects hidden" id="view-projects">
+      <section class="panel projects-panel">
+        <div class="panel-head">
+          <h2>PROJECTS</h2>
+          <span class="panel-note">a project is its own room — clean slate on entry, its own builds, revisitable later</span>
+          <button id="projects-new" class="btn" type="button">✚ new project</button>
+          <button id="projects-refresh" class="btn btn-ghost" type="button" title="refresh">↻</button>
+        </div>
+        <form id="project-form" class="project-form hidden">
+          <input id="project-title" type="text" maxlength="80" placeholder="project name — e.g. coffin dodger" />
+          <textarea id="project-goal" rows="3" maxlength="600" placeholder="what should it be? one or two lines. The agent works from this brief and nothing else — no memory of your other chats."></textarea>
+          <div class="project-form-actions">
+            <button class="btn" type="submit">create + open chat</button>
+            <button id="project-cancel" class="btn btn-ghost" type="button">cancel</button>
+          </div>
+        </form>
+        <div id="projects-list" class="projects-list"></div>
+        <p id="projects-empty" class="empty-note">no projects yet — “✚ new project” starts one with a clean slate.</p>
+      </section>
     </main>
 
     <main class="layout-builds hidden" id="view-builds">
