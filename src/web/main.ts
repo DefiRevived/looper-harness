@@ -67,6 +67,7 @@ const chatForm = $<HTMLFormElement>('chat-form');
 const chatInput = $<HTMLInputElement>('chat-input');
 const chatSend = $<HTMLButtonElement>('chat-send');
 const chatReset = $<HTMLButtonElement>('chat-reset');
+const chatHead = $<HTMLHeadingElement>('chat-head');
 const viewProjects = $<HTMLElement>('view-projects');
 const projectsList = $<HTMLDivElement>('projects-list');
 const projectsEmpty = $<HTMLParagraphElement>('projects-empty');
@@ -174,9 +175,16 @@ let tokenId = Number.isInteger(storedToken) && storedToken >= 1 ? storedToken : 
 // A PROJECT is a private room: its own session key, so its chat and its builds
 // live under it and nothing from your other chats is reachable from inside it.
 // Stored per token; “← main chat” clears it.
+//
+// sessionKeyFor is the ONLY place the console decides a session key. It used to be
+// computed here AND reset inside activate(), and activate() won — every boot
+// switched the chat back to the main thread while the project bar still said
+// PROJECT, so project turns ran with full memory of everything else.
+const PROJ_SEP = ':proj:';
 const activeProjectFor = (token: number): string => (token ? localStorage.getItem(`looper-harness.project.${token}`) ?? '' : '');
+const sessionKeyFor = (token: number, projectId: string): string => (token && projectId ? `web:${token}${PROJ_SEP}${projectId}` : `web:${token}`);
 let activeProjectId = activeProjectFor(tokenId);
-let sessionKey = activeProjectId ? `web:${tokenId}:proj:${activeProjectId}` : `web:${tokenId}`;
+let sessionKey = sessionKeyFor(tokenId, activeProjectId);
 let streaming = false;
 let activeAbort: AbortController | null = null;
 
@@ -2149,7 +2157,10 @@ async function activate(token: number): Promise<void> {
   const firstBoot = !activationEl.classList.contains('hidden');
   const previous = { tokenId, sessionKey };
   tokenId = token;
-  sessionKey = `web:${tokenId}`;
+  // Re-derive from THIS token's active project. Hard-coding `web:${tokenId}` here
+  // silently dropped the project room on every boot.
+  activeProjectId = activeProjectFor(tokenId);
+  sessionKey = sessionKeyFor(tokenId, activeProjectId);
 
   try {
     const data = await fetchBundle(tokenId);
@@ -2314,6 +2325,9 @@ function exitProject(): void {
 
 function renderProjectBar(): void {
   projectBar.classList.toggle('hidden', !activeProjectId);
+  // Name the room in the chat header too: the bar alone left it ambiguous which
+  // thread the operator was actually typing into.
+  chatHead.textContent = activeProjectId ? `PROJECT · ${activeProject?.title ?? activeProjectId}` : 'COMMS';
   if (!activeProjectId) return;
   projectBarTitle.textContent = activeProject?.title ?? activeProjectId;
   projectBarGoal.textContent = activeProject?.goal || 'no goal stated — give the agent one line of direction';

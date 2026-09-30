@@ -125,6 +125,7 @@ export function projectDirective(project: StudioProject): string {
       ? `The operator's goal for it: ${project.goal}`
       : 'The operator has not stated a goal — ask for one line of direction, or propose one and say it plainly.',
     '- No memory of other chats applies here: do not draw on other projects, their builds, or their lessons. Whatever you build starts from THIS brief.',
+    '- The operator opened a PROJECT precisely because past work converged: do NOT reach for your default stack, genre or palette. Before building, write ONE line naming what makes this structurally different from anything you have built — then build that, not a remix.',
     '- Your gallery in this project starts empty and grows only with what you build here. The operator revisits this project to continue it, so leave it in a state they can pick up, and say what remains.',
   ].join('\n');
 }
