@@ -35,12 +35,24 @@ if (!llmApiKey()) {
   console.log('\nno API key configured — live checks skipped');
 } else {
   console.log('\nturn 1 — reasoning-bait reply: reasoning must stream BEFORE the text');
-  const events: AgentEvent[] = [];
-  // A trivial prompt can legitimately skip the hybrid model's thinking phase
-  // (seen live), which would make the assertion below meaningless — this
-  // arithmetic prompt reliably triggers reasoning.
-  for await (const event of streamAgentReplyWithTools(TOKEN, 'test:thought-stream', 'Think it through step by step, then reply with exactly: 391 — do not use any tools.', 'web')) {
-    events.push(event);
+  // The hybrid model MAY skip its thinking phase on a trivial prompt, and that
+  // is not a harness defect — it flipped whole runs red depending on how much
+  // context preceded the call. Retry with a FRESH session until the model
+  // actually thinks (up to 3); a model that never thinks in three tries is the
+  // real failure. Each attempt gets its own session so prior turns can't bias it.
+  let events: AgentEvent[] = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    events = [];
+    for await (const event of streamAgentReplyWithTools(
+      TOKEN,
+      `test:thought-stream-${attempt}`,
+      'Think it through step by step, then reply with exactly: 391 — do not use any tools.',
+      'web',
+    )) {
+      events.push(event);
+    }
+    if (events.some((e) => e.type === 'thought' && e.text.trim())) break;
+    if (attempt < 3) console.log(`  … attempt ${attempt}: model skipped its thinking phase (not a defect) — retrying`);
   }
   const firstThought = events.findIndex((e) => e.type === 'thought' && e.text.trim());
   const firstDelta = events.findIndex((e) => e.type === 'delta' && e.text.trim());

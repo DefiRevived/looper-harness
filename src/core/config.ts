@@ -27,6 +27,13 @@ export const config = {
     // the headroom unused and truncating long turns (a reasoning-heavy reply hit
     // it and the turn died mid-generation). Env: LOOPER_MAX_OUTPUT_TOKENS.
     maxOutputTokens: Math.max(1024, Number(env('LOOPER_MAX_OUTPUT_TOKENS', '131072')) || 131072),
+    // The thinking stream can be turned OFF but NOT budgeted (probed: `thinking:
+    // {type:'disabled'}` zeroes reasoning, `budget_tokens` is silently ignored).
+    // Kept ON by default — the operator asked for the live thought stream, and
+    // multi-step tool work benefits — but the harness turns it off for ONE rescue
+    // round when a reply was cut mid-spiral, so the continuation cannot spiral
+    // again. Env: LOOPER_THINKING=off for a permanently quieter/simpler brain.
+    thinkingOff: env('LOOPER_THINKING', 'on').toLowerCase() === 'off',
   },
   telegramBotToken: env('TELEGRAM_BOT_TOKEN'),
   discordBotToken: env('DISCORD_BOT_TOKEN'),

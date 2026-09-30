@@ -346,6 +346,7 @@ export async function* streamAgentReplyWithTools(
   let lastCallSignature = '';
   let repeats = 0;
   let continuations = 0;
+  let suppressThinking = false;
   // Projects this turn touched, and whether the gate already ran (once per turn).
   const dirtyFolders = new Map<string, number>();
   let gateDone = false;
@@ -446,7 +447,12 @@ export async function* streamAgentReplyWithTools(
       let roundText = '';
       let pendingCalls: ToolCall[] = [];
       let cutText = false;
-      for await (const step of streamSteps(messages, specs.length ? specs : undefined, opts)) {
+      // A rescue round (the one right after a cut reply) streams with thinking
+      // OFF: the cut means a reasoning spiral already ate the budget, and asking
+      // it to please be brief is not enforcement. Next round, thinking returns.
+      const thinkingOff = suppressThinking;
+      suppressThinking = false;
+      for await (const step of streamSteps(messages, specs.length ? specs : undefined, { ...opts, thinking: thinkingOff ? 'off' : undefined })) {
         if (step.type === 'text') {
           roundText += step.text;
           full += step.text;
@@ -478,6 +484,9 @@ export async function* streamAgentReplyWithTools(
         // deliberating and act, which is what actually burned the budget.
         if (cutText && continuations < MAX_CONTINUATIONS) {
           continuations += 1;
+          // Enforced, not requested: the continuation runs without a thinking
+          // stream, so the spiral that caused the cut cannot repeat.
+          suppressThinking = true;
           messages.push({ role: 'assistant', content: roundText });
           messages.push({
             role: 'user',

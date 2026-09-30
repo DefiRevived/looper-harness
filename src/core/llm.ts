@@ -58,7 +58,7 @@ export function llmMode(): LlmMode {
  * defaults to DeepSeek. Without an API key it falls back to the local mock
  * brain (mock never emits tool calls).
  */
-export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], opts?: { signal?: AbortSignal }): AsyncGenerator<StreamStep> {
+export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], opts?: { signal?: AbortSignal; thinking?: 'on' | 'off' }): AsyncGenerator<StreamStep> {
   if (llmMode() === 'mock') {
     for await (const step of mockStream(messages)) {
       if (opts?.signal?.aborted) throw new Error('stopped by operator');
@@ -96,6 +96,10 @@ export async function* streamSteps(messages: ChatMessage[], tools?: ToolSpec[], 
       // Explicit ceiling: without it the provider default applies and a large
       // tool call (one build file) is cut off mid-JSON.
       ...(maxTokensSupported ? { max_tokens: config.deepseek.maxOutputTokens } : {}),
+      // The dial is binary (no budget form): 'off' skips the reasoning phase
+      // entirely, which is how a cut-then-continue round is forced to ANSWER
+      // instead of spiralling again.
+      ...(opts?.thinking === 'off' || config.deepseek.thinkingOff ? { thinking: { type: 'disabled' } } : {}),
       ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
     });
     const send = (): Promise<Response> =>
