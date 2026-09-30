@@ -20,7 +20,7 @@ const check = (label: string, ok: boolean, detail = ''): void => {
 
 // 1) manifest + files
 const libs = libManifest();
-check('manifest lists the vendored set (9)', libs.length === 9, String(libs.length));
+check('manifest lists the vendored set (19)', libs.length === 19, String(libs.length));
 for (const l of libs) {
   const p = path.resolve('libs', l.file);
   const ok = fs.existsSync(p) && fs.statSync(p).size === l.bytes && l.bytes > 1024;

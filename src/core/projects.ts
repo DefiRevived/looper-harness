@@ -21,7 +21,8 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { recordBuildOutcome } from './buildState.js';
+import { lastBuildOutcome, recordBuildOutcome } from './buildState.js';
+import { distillLesson } from './lessons.js';
 
 /**
  * Curated package allowlist. Names only — the agent picks sane majors.
@@ -68,6 +69,31 @@ export const PROJECT_ALLOWLIST: string[] = [
   'tailwindcss',
   '@tailwindcss/vite',
   'lucide-react',
+  '@floating-ui/dom',
+  // 2D + 3D + audio + animation (all offline-capable — builds have no network)
+  'pixi.js',
+  'postprocessing',
+  'troika-three-text',
+  'cannon-es',
+  'tone',
+  'lottie-web',
+  'uplot',
+  // text, docs + syntax
+  'marked',
+  'dompurify',
+  'katex',
+  'prismjs',
+  // data + utility
+  'zod',
+  'nanoid',
+  'papaparse',
+  'jszip',
+  'file-saver',
+  'qrcode',
+  'mathjs',
+  'fuse.js',
+  'dexie',
+  'html-to-image',
 ];
 
 /** Short summary for prompts/messages. */
@@ -437,6 +463,34 @@ export async function verifyBuilds(
   return { ok, verified: targets.length, report: lines.join('\n') };
 }
 
+/** Source files modified since a timestamp (skips node_modules/dist/dotfiles) — the evidence of a fix. */
+function changedSince(folder: string, since: number): string[] {
+  const out: string[] = [];
+  const visit = (base: string, rel = ''): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(base, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === 'dist' || e.name.startsWith('.')) continue;
+      const full = path.join(base, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) visit(full, r);
+      else {
+        try {
+          if (fs.statSync(full).mtimeMs > since) out.push(r);
+        } catch {
+          // vanished mid-walk
+        }
+      }
+    }
+  };
+  visit(folder);
+  return out.slice(0, 12);
+}
+
 /** The most recent ACTIVE job for a folder — lets the preview dedupe auto-builds. */
 export function activeJobFor(folder: string): JobSnapshot | null {
   const active = [...jobs.values()]
@@ -519,6 +573,7 @@ export async function projectBuild(
   }
 
   const via = opts.via ?? 'agent';
+  const prevOutcome = lastBuildOutcome(folder);
   const outcome = (ok: boolean, message: string): { ok: boolean; message: string } => {
     recordBuildOutcome(folder, { ok, at: Date.now(), detail: message.slice(0, 1200), via });
     return { ok, message };
@@ -550,6 +605,17 @@ export async function projectBuild(
         : '');
     const out = outcome(true, `${summary}Run check_build (static) and verify_render (real render) on it now.`);
     recordBuildOutcome(folder, { ok: true, at: Date.now(), detail: `${summary.slice(0, 1100)}`, via });
+    // FAIL → fix → OK. That sequence IS the lesson; distill it in the background
+    // so the next build that breaks the same way starts with the answer.
+    if (prevOutcome && !prevOutcome.ok) {
+      const changed = changedSince(folder, prevOutcome.at);
+      void distillLesson({
+        folder,
+        buildId: path.basename(folder),
+        failureDetail: prevOutcome.detail,
+        changedFiles: changed,
+      });
+    }
     return out;
   });
   if (!result) {

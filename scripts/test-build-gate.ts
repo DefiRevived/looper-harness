@@ -10,6 +10,9 @@ import path from 'node:path';
 const tmp = path.resolve('tmp-buildgate-test');
 fs.rmSync(tmp, { recursive: true, force: true });
 process.env.LOOPER_DATA_DIR = tmp; // must precede core imports
+// The fail → fix → ok sequence triggers lesson distillation; keep tests (and the
+// operator's credits) out of it.
+process.env.LOOPER_NO_LESSONS = '1';
 
 const { verifyBuilds } = await import('../src/core/projects.js');
 const { lastBuildOutcome, failingBuilds, buildOutcomeLine } = await import('../src/core/buildState.js');

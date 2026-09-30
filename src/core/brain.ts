@@ -10,6 +10,7 @@ import { collectReceipts, receiptsLine, type Receipts } from './receipts.js';
 import { libSummary } from './libs.js';
 import { allowlistSummary, verifyBuilds } from './projects.js';
 import { buildOutcomeLine, failingBuilds, lastBuildOutcome } from './buildState.js';
+import { lessonLines, recentLessons } from './lessons.js';
 import { listVersions } from './versions.js';
 import * as store from './store.js';
 
@@ -174,18 +175,28 @@ const PROJECT_WRITE_TOOLS = new Set(['write_build_file', 'delete_build_file', 'e
  * turn already knowing what is broken instead of being told twice.
  */
 function buildStateNote(sessionKey: string, build: { parentKey: string; buildId: string } | null): string {
+  const parts: string[] = [];
   if (build) {
     const folder = buildFolderFor(build.parentKey, build.buildId);
     const line = folder ? buildOutcomeLine(folder, 'this build') : null;
-    return line ? `BUILD STATE (measured by the harness, not claimed):\n${line}` : '';
+    if (line) parts.push(`BUILD STATE (measured by the harness, not claimed):\n${line}`);
+  } else {
+    const failing = failingBuilds(sessionDirName(sessionKey));
+    if (failing.length) {
+      parts.push(
+        'BUILD STATE (measured by the harness, not claimed) — projects of this console whose last build FAILED:\n' +
+          `${failing.map((f) => f.line).join('\n')}\n` +
+          'Fix the errors and run project_build, or say plainly that it does not build.',
+      );
+    }
   }
-  const failing = failingBuilds(sessionDirName(sessionKey));
-  if (!failing.length) return '';
-  return (
-    'BUILD STATE (measured by the harness, not claimed) — projects of this console whose last build FAILED:\n' +
-    `${failing.map((f) => f.line).join('\n')}\n` +
-    'Fix the errors and run project_build, or say plainly that it does not build.'
-  );
+  // Lessons earned from this harness's own past failures — cheap, high-yield,
+  // and nothing else was carrying them forward.
+  const lessons = recentLessons(2);
+  if (lessons.length) {
+    parts.push(`LESSONS FROM YOUR OWN PAST FIXES (distilled from real build failures):\n${lessons.map((l) => `- ${l.text}`).join('\n')}`);
+  }
+  return parts.join('\n\n');
 }
 
 /** Build id this call targets (explicit arg or the thread's build) — activity ledger key. */

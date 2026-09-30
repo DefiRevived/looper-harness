@@ -15,6 +15,7 @@ import { allowlistSummary, checkPackage, isProjectFolder, jobStatus, jobStatusTe
 import { searchContracts, webFetch, webSearch } from './research.js';
 import { diffTrees } from './diff.js';
 import { contractEvidence, ownerOfCheck } from './evidence.js';
+import { forgetLesson, lessonsReport } from './lessons.js';
 import { buildStatusReport, collectReceipts } from './receipts.js';
 import { DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S, runBuildModule } from './runner.js';
 import { renderBuild, resizePng, type RenderReport } from './render.js';
@@ -2583,6 +2584,33 @@ const RUN_MODULE_TOOL: ToolDefinition = {
   execute: runModuleTool,
 };
 
+/** lessons — what the harness has learned from its own build failures. */
+function lessonsTool(args: Record<string, unknown>, ctx: ToolContext): ToolResult {
+  const deny = webOnly('lessons', ctx);
+  if (deny) return deny;
+  const forget = typeof args.forget === 'string' && args.forget.trim() ? args.forget.trim() : '';
+  if (forget) {
+    return { modelText: forgetLesson(forget) ? `Forgot lesson ${forget}.` : `No lesson with id "${forget}" — call lessons to list them.` };
+  }
+  const limit = Math.min(30, Math.max(1, Number(args.limit) || 10));
+  return { modelText: lessonsReport(limit) };
+}
+
+const LESSONS_TOOL: ToolDefinition = {
+  name: 'lessons',
+  description:
+    'The build lessons this harness learned from its OWN failures: each is distilled when a build that FAILED later succeeded after an edit, and they are injected automatically when a matching error appears again. Read them before a risky build, or when the operator asks what you have learned from past mistakes. Forget a wrong or stale one with lessons forget="<id>".',
+  parameters: {
+    type: 'object',
+    properties: {
+      limit: { type: 'integer', description: 'How many recent lessons to show (default 10, max 30).' },
+      forget: { type: 'string', description: 'Lesson id to remove.' },
+    },
+    required: [],
+  },
+  execute: lessonsTool,
+};
+
 /** job_status — progress + output tail for background installs/builds. */
 async function jobStatusTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const deny = webOnly('job_status', ctx);
@@ -3169,6 +3197,7 @@ const TOOLS: ToolDefinition[] = [
   MARKET_PRICE_TOOL,
   REMEMBER_TOOL,
   RECALL_TOOL,
+  LESSONS_TOOL,
 ];
 
 /** Build-thread-only tools: they need a buildId from the session key. */
