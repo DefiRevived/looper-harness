@@ -67,6 +67,7 @@ const chatForm = $<HTMLFormElement>('chat-form');
 const chatInput = $<HTMLInputElement>('chat-input');
 const chatSend = $<HTMLButtonElement>('chat-send');
 const chatReset = $<HTMLButtonElement>('chat-reset');
+const chatFresh = $<HTMLButtonElement>('chat-fresh');
 const chatStop = $<HTMLButtonElement>('chat-stop');
 const helixaCredEl = $<HTMLDivElement>('helixa-cred');
 const artifactsList = $<HTMLDivElement>('artifacts-list');
@@ -158,7 +159,11 @@ let currentView: View = 'console';
 // looperagent console's `looper.token`, even when both share an origin.
 const storedToken = Number(localStorage.getItem('looper-harness.token') ?? '');
 let tokenId = Number.isInteger(storedToken) && storedToken >= 1 ? storedToken : 0;
-let sessionKey = `web:${tokenId}`;
+// A FRESH chat is just a different session key — history and builds are
+// namespaced per key, so a fresh key also starts with an empty gallery. Stored
+// per token and cleared by clicking "← main chat".
+const freshKeyFor = (token: number): string => (token ? localStorage.getItem(`looper-harness.fresh.${token}`) ?? '' : '');
+let sessionKey = freshKeyFor(tokenId) || `web:${tokenId}`;
 let streaming = false;
 let activeAbort: AbortController | null = null;
 
@@ -2189,6 +2194,27 @@ chatReset.addEventListener('click', async () => {
   void loadActivity();
 });
 
+// ✚ fresh chat — a session with NO memory: no episodes, no lessons, no build
+// state or failing-build list, no prior-work inspection (the recollection tools
+// are hidden for it server-side), and a randomly drawn creative brief so two
+// fresh chats cannot converge on the same idea. The reload is deliberate: boot
+// re-reads the stored key and loads that session's (empty) history.
+function renderFreshLabel(): void {
+  const active = Boolean(freshKeyFor(tokenId));
+  chatFresh.textContent = active ? '← main chat' : '✚ fresh chat';
+  chatFresh.title = active
+    ? 'Leave this memory-free chat and go back to the main console thread'
+    : 'Start a chat with no memory of anything before it';
+}
+chatFresh.addEventListener('click', () => {
+  if (!tokenId) return;
+  const key = `looper-harness.fresh.${tokenId}`;
+  if (localStorage.getItem(key)) localStorage.removeItem(key);
+  else localStorage.setItem(key, `web:${tokenId}:fresh:${Date.now().toString(36)}`);
+  location.reload();
+});
+renderFreshLabel();
+
 vitalsRefresh.addEventListener('click', () => void loadVitals());
 activityRefresh.addEventListener('click', () => void loadActivity());
 tasksRefresh.addEventListener('click', () => void loadLedger());
@@ -2581,7 +2607,7 @@ window.addEventListener('message', (event) => {
 });
 
 function startConsole(): void {
-  if (tokenId) void activate(tokenId);
+  if (tokenId) void activate(tokenId).then(() => renderFreshLabel());
   else showActivation();
 }
 

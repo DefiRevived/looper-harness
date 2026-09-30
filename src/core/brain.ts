@@ -13,6 +13,7 @@ import { libSummary } from './libs.js';
 import { allowlistSummary, verifyBuilds } from './projects.js';
 import { buildOutcomeLine, failingBuilds, lastBuildOutcome } from './buildState.js';
 import { lessonLines, recentLessons } from './lessons.js';
+import { freshDirective, isFreshSession } from './fresh.js';
 import { listVersions } from './versions.js';
 import * as store from './store.js';
 
@@ -329,13 +330,23 @@ export async function* streamAgentReplyWithTools(
 ): AsyncGenerator<AgentEvent> {
   const build = parseBuildThread(sessionKey);
   const ctx: ToolContext = { sessionKey, surface, tokenId, buildId: build?.buildId };
-  const specs = toolSpecsForSurface(surface, { buildThread: build !== null });
-  const stateNote = buildStateNote(sessionKey, build);
-  const extraContext = build
-    ? [await buildThreadContext(tokenId, build.parentKey, build.buildId, readBuildSource(build.parentKey, build.buildId)), stateNote]
-        .filter(Boolean)
-        .join('\n\n') || undefined
-    : stateNote || undefined;
+  // A FRESH session gets no recollection at all: no measured build state, no
+  // lessons, no episodes, no prior-work inspection — plus a randomly drawn brief
+  // so two fresh chats cannot converge on the same idea or palette.
+  const fresh = isFreshSession(sessionKey);
+  const specs = toolSpecsForSurface(surface, { buildThread: build !== null, fresh });
+  const stateNote = fresh ? '' : buildStateNote(sessionKey, build);
+  const freshNote = fresh ? freshDirective(sessionKey) : '';
+  const extraContext =
+    [
+      build
+        ? await buildThreadContext(tokenId, build.parentKey, build.buildId, readBuildSource(build.parentKey, build.buildId))
+        : '',
+      stateNote,
+      freshNote,
+    ]
+      .filter(Boolean)
+      .join('\n\n') || undefined;
   const messages = await prepareTurn(tokenId, sessionKey, userText, undefined, extraContext);
   let full = '';
   let stopped = false;

@@ -66,6 +66,9 @@ export async function distillMessages(
   minFresh: number,
 ): Promise<boolean> {
   if (llmMode() !== 'live') return false; // the mock brain cannot summarize honestly
+  // A FRESH chat (see fresh.ts) must not WRITE the memory it was never allowed to
+  // read — otherwise a throwaway experiment resurfaces as an episode later.
+  if (sessionKey.includes(':fresh:')) return false;
   if (messages.length < MIN_MESSAGES) return false;
 
   const cutoff = Math.max(0, messages.length - keepRecent);
