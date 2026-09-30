@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { config } from './config.js';
 import { loadLooper, type LooperBundle } from './codex.js';
 import { buildSystemPrompt } from './persona.js';
 import { completeReply, streamReply, streamSteps, type ChatMessage, type ToolCall } from './llm.js';
@@ -158,7 +160,28 @@ export type AgentEvent =
   // renders a card; the answer arrives as the next user message.
   | { type: 'decision'; question: string; options: string[] };
 
-const MAX_TOOL_ROUNDS = 8;
+/**
+ * There is NO cap on tool rounds. A multi-file project legitimately needs many
+ * of them, and a cliff mid-build is worse than a long turn — the live signal-deck
+ * run stopped one file short of a working project precisely because it ran out of
+ * rounds. What IS guarded against is a DEGENERATE loop, not a long one:
+ *   - the same tool call repeated unchanged (a retry loop), and
+ *   - a turn far past any sane duration (config.turnBudgetS).
+ * Both fire on pathology only; productive work is never cut off.
+ */
+const IDENTICAL_ROUND_LIMIT = 3;
+
+/** Cheap fingerprint of a round's calls — same calls twice means 'stuck', not 'working'. */
+function callSignature(calls: ToolCall[]): string {
+  return calls
+    .map((c) => {
+      const args = c.function.arguments;
+      let h = 7;
+      for (let i = 0; i < args.length; i++) h = (h * 31 + args.charCodeAt(i)) % 1_000_000_007;
+      return `${c.function.name}:${args.length}:${h}`;
+    })
+    .join('|');
+}
 
 /**
  * Tools whose success means "this project's source changed". The turn-close
@@ -311,13 +334,109 @@ export async function* streamAgentReplyWithTools(
   const messages = await prepareTurn(tokenId, sessionKey, userText, undefined, extraContext);
   let full = '';
   let stopped = false;
-  let roundsExhausted = false;
+  // Runaway guards (see IDENTICAL_ROUND_LIMIT) — not a round cap.
+  const turnStartedAt = Date.now();
+  let stalled = false;
+  let budgetSpent = false;
+  let lastCallSignature = '';
+  let repeats = 0;
   // Projects this turn touched, and whether the gate already ran (once per turn).
   const dirtyFolders = new Map<string, number>();
   let gateDone = false;
 
+  /**
+   * Turn-close verification gate: build anything this turn wrote to a REAL
+   * project and hand the compiler's answer back, in-turn.
+   *
+   * It runs at BOTH exits, and that matters: a multi-file project written one
+   * file per round burns the round budget, and the loop then leaves via the
+   * EXHAUSTED path — which used to skip the gate entirely. That is how a 9-file
+   * project stopped one file short with nothing built and no error surfaced.
+   * If the turn touched a project, the turn ends knowing whether it builds.
+   */
+  const runGate = async function* (): AsyncGenerator<AgentEvent, { ran: boolean; ok: boolean }> {
+    if (gateDone || surface !== 'web' || opts?.signal?.aborted) return { ran: false, ok: true };
+    const unbuilt = [...dirtyFolders.entries()]
+      .filter(([folder, wroteAt]) => {
+        const last = lastBuildOutcome(folder);
+        return !last || last.at < wroteAt; // nothing has built it since the last write
+      })
+      .map(([folder]) => folder);
+    if (!unbuilt.length) return { ran: false, ok: true };
+    gateDone = true;
+    const startedAt = Date.now();
+    const plural = unbuilt.length === 1 ? '' : 's';
+    yield {
+      type: 'tool',
+      name: 'verify build',
+      note: `${unbuilt.length} project${plural} changed this turn — building before the turn ends`,
+    };
+    let report: { ok: boolean; verified: number; report: string } | null = null;
+    const work = verifyBuilds(unbuilt, 'gate');
+    for (;;) {
+      const settled = await Promise.race([work, sleepTick(5_000)]);
+      if (settled) {
+        report = settled;
+        break;
+      }
+      yield { type: 'tool_tick', name: 'verify build', ms: Date.now() - startedAt };
+    }
+    logActivity(sessionKey, 'verify_build', { ok: report.ok, ms: Date.now() - startedAt });
+    yield {
+      type: 'tool_done',
+      name: 'verify build',
+      ms: Date.now() - startedAt,
+      ok: report.ok,
+      note: report.ok ? 'builds ✓' : firstLine(report.report) || 'BUILD FAILED',
+    };
+    if (report.verified) {
+      // A green build proves it COMPILES, not that it works. Render it too, so
+      // the turn ends with 'it builds AND it rendered' — a blank canvas or a
+      // thrown runtime error is exactly what a build cannot see. Best-effort and
+      // capped at one render per turn; a render failure never fails the turn.
+      let renderNote = '';
+      let renderOk = true;
+      if (report.ok) {
+        const buildId = path.basename(unbuilt[0] ?? '');
+        if (buildId) {
+          const renderStart = Date.now();
+          yield { type: 'tool', name: 'verify render', note: buildId };
+          try {
+            const res = await executeToolCall(
+              { id: 'gate-render', type: 'function', function: { name: 'verify_render', arguments: JSON.stringify({ build_id: buildId }) } },
+              ctx,
+            );
+            renderOk = /RENDERED CLEAN/i.test(res.modelText);
+            renderNote = `\nRENDER CHECK (headless, the served preview):\n${res.modelText.slice(0, 700)}`;
+            yield {
+              type: 'tool_done',
+              name: 'verify render',
+              ms: Date.now() - renderStart,
+              ok: renderOk,
+              note: firstLine(res.modelText) || (renderOk ? 'rendered clean' : 'render issues'),
+            };
+          } catch (err) {
+            yield { type: 'tool_done', name: 'verify render', ms: Date.now() - renderStart, ok: true, note: `render check skipped: ${(err as Error).message}` };
+          }
+        }
+      }
+      messages.push({
+        role: 'user',
+        content:
+          `(system note for this turn only — not from the operator: the harness just BUILT the project${plural} you changed. Result:\n${report.report}${renderNote}\n` +
+          (report.ok
+            ? renderOk
+              ? 'It builds and the render check above is clean — say that, because both were just measured. Do not claim more than that.)'
+              : 'It builds, but the RENDER CHECK above found problems (errors or a blank page). Fix them now, then rebuild and re-check before you stop.)'
+            : 'Fix these errors now with edit_build / write_build_file, then run project_build again. If you cannot fix them, say plainly that it does not build and quote the error.)'),
+      });
+      return { ran: true, ok: report.ok && renderOk };
+    }
+    return { ran: false, ok: true };
+  };
+
   try {
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    for (let round = 0; ; round++) {
       let roundText = '';
       let pendingCalls: ToolCall[] = [];
       for await (const step of streamSteps(messages, specs.length ? specs : undefined, opts)) {
@@ -333,65 +452,23 @@ export async function* streamAgentReplyWithTools(
           pendingCalls = step.toolCalls;
         }
       }
-      if (pendingCalls.length === 0) {
-        // Turn-close verification gate. The model believes it is finished; if it
-        // changed a REAL project this turn and nothing has built it since, build
-        // it NOW and hand back what the compiler said. An agent that never runs
-        // the build cannot know it broke something — and "it works" has to be a
-        // measurement, not an assumption.
-        if (!gateDone && surface === 'web' && !opts?.signal?.aborted) {
-          const unbuilt = [...dirtyFolders.entries()]
-            .filter(([folder, wroteAt]) => {
-              const last = lastBuildOutcome(folder);
-              return !last || last.at < wroteAt; // nothing built it since the last write
-            })
-            .map(([folder]) => folder);
-          if (unbuilt.length) {
-            gateDone = true;
-            const startedAt = Date.now();
-            yield {
-              type: 'tool',
-              name: 'verify build',
-              note: `${unbuilt.length} project${unbuilt.length === 1 ? '' : 's'} changed this turn — building before the turn ends`,
-            };
-            let report: { ok: boolean; verified: number; report: string } | null = null;
-            const work = verifyBuilds(unbuilt, 'gate');
-            for (;;) {
-              const settled = await Promise.race([work, sleepTick(5_000)]);
-              if (settled) {
-                report = settled;
-                break;
-              }
-              yield { type: 'tool_tick', name: 'verify build', ms: Date.now() - startedAt };
-            }
-            logActivity(sessionKey, 'verify_build', { ok: report.ok, ms: Date.now() - startedAt });
-            yield {
-              type: 'tool_done',
-              name: 'verify build',
-              ms: Date.now() - startedAt,
-              ok: report.ok,
-              note: report.ok ? 'builds ✓' : firstLine(report.report) || 'BUILD FAILED',
-            };
-            if (report.verified) {
-              messages.push({
-                role: 'user',
-                content:
-                  `(system note for this turn only — not from the operator: the harness just BUILT the project${unbuilt.length === 1 ? '' : 's'} you changed. Result:\n${report.report}\n` +
-                  (report.ok
-                    ? 'It builds — say that because it was just built. Rendering still needs verify_render; do not claim more than that.)'
-                    : 'Fix these errors now with edit_build / write_build_file, then run project_build again. If you cannot fix them, say plainly that it does not build and quote the error.)'),
-              });
-              // On the last allowed round there are no tool rounds left to fix
-              // anything in — force the tools-free closing round so the failure
-              // gets a spoken explanation instead of silence.
-              roundsExhausted = round === MAX_TOOL_ROUNDS - 1;
-              continue;
-            }
-          }
-        }
+      // Degenerate-loop guard: identical calls repeated means stuck, not building.
+      const signature = callSignature(pendingCalls);
+      repeats = pendingCalls.length && signature === lastCallSignature ? repeats + 1 : 0;
+      lastCallSignature = signature;
+      if (repeats >= IDENTICAL_ROUND_LIMIT) {
+        stalled = true;
         break;
       }
-      roundsExhausted = round === MAX_TOOL_ROUNDS - 1;
+      if (pendingCalls.length === 0) {
+        const gate = yield* runGate();
+        if (!gate.ran) break;
+        continue; // let the model react to the build result
+      }
+      if (Date.now() - turnStartedAt > config.turnBudgetS * 1000) {
+        budgetSpent = true;
+        break;
+      }
 
       messages.push({ role: 'assistant', content: roundText, tool_calls: pendingCalls });
       for (const call of pendingCalls) {
@@ -423,7 +500,13 @@ export async function* streamAgentReplyWithTools(
           // "This project's source changed" — the gate's input.
           if (PROJECT_WRITE_TOOLS.has(call.function.name)) {
             const folder = buildFolderFor(build?.parentKey ?? sessionKey, result.artifact.id);
-            if (folder) dirtyFolders.set(folder, Date.now());
+            if (folder) {
+              dirtyFolders.set(folder, Date.now());
+              // New source voids the previous verification: the gate may run
+              // again later in this same turn. "Fix it until it builds" needs no
+              // round cap — a failed build earns another attempt.
+              gateDone = false;
+            }
           }
         }
         if (result.deleted) yield { type: 'artifact-removed', id: result.deleted };
@@ -434,14 +517,18 @@ export async function* streamAgentReplyWithTools(
       yield { type: 'delta', text: '\n\n' };
       full += '\n\n';
     }
-    if (roundsExhausted) {
-      // The model spent every tool round on calls — force one tools-free round
-      // to close the turn with an actual message instead of "(no output)".
-      // A nudge is added IN-TURN ONLY (never persisted): the live tip-jar turn
-      // showed the closing round can otherwise come back without any text.
+    if (stalled || budgetSpent) {
+      // Ran into a guard, not a round cap. The gate still runs: a turn must not
+      // end with a half-landed project and no build result.
+      yield* runGate();
+      // Force one tools-free round so the turn closes with an actual message
+      // instead of "(no output)", and so the model can say where things stand.
+      // A nudge is added IN-TURN ONLY (never persisted).
       const nudge: ChatMessage = {
         role: 'user',
-        content: '(system note for this turn only — not from the operator: tools are unavailable now. Summarize what you did, what the results were, and anything the operator must know. Plain text, no tool syntax.)',
+        content: stalled
+          ? '(system note for this turn only — not from the operator: you repeated the same tool call unchanged three times, so the turn was stopped to avoid a loop. Tools are unavailable now. Say plainly what state things are in and exactly what remains.)'
+          : `(system note for this turn only — not from the operator: this turn reached its ${Math.round(config.turnBudgetS / 60)}-minute safety limit. Tools are unavailable now. Say plainly what state things are in and exactly what remains.)`,
       };
       const before = full.length;
       for await (const step of streamSteps([...messages, nudge], undefined, opts)) {
@@ -497,9 +584,12 @@ export async function agentReplyWithTools(
   const ctx: ToolContext = { sessionKey, surface, tokenId };
   const messages = await prepareTurn(tokenId, sessionKey, effective, turn);
   let full = '';
-  let roundsExhausted = false;
+  // Same runaway guards as the streaming path — no round cap.
+  let stalled = false;
+  let lastSignature = '';
+  let repeats = 0;
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+  for (let round = 0; ; round++) {
     let roundText = '';
     let pendingCalls: ToolCall[] = [];
     for await (const step of streamSteps(messages, specs)) {
@@ -510,8 +600,14 @@ export async function agentReplyWithTools(
         pendingCalls = step.toolCalls;
       }
     }
+    const signature = callSignature(pendingCalls);
+    repeats = pendingCalls.length && signature === lastSignature ? repeats + 1 : 0;
+    lastSignature = signature;
+    if (repeats >= IDENTICAL_ROUND_LIMIT) {
+      stalled = true;
+      break;
+    }
     if (pendingCalls.length === 0) break;
-    roundsExhausted = round === MAX_TOOL_ROUNDS - 1;
 
     messages.push({ role: 'assistant', content: roundText, tool_calls: pendingCalls });
     for (const call of pendingCalls) {
@@ -522,7 +618,7 @@ export async function agentReplyWithTools(
     full += '\n\n';
   }
 
-  if (roundsExhausted) {
+  if (stalled) {
     // One tools-free closing round (same rationale as the streaming path).
     for await (const step of streamSteps(messages)) {
       if (step.type === 'text') full += step.text;

@@ -44,6 +44,11 @@ export const config = {
   // on, the preview itself finishes the job it needs: it starts the build and
   // reloads into the site. Set LOOPER_PREVIEW_AUTOBUILD=false to disable.
   autoBuildPreview: env('LOOPER_PREVIEW_AUTOBUILD', 'true') !== 'false',
+  // A tool-round CAP was the wrong control: a multi-file project legitimately
+  // needs many rounds, and stopping mid-build left projects one file short of
+  // working. Turns are bounded by TIME and by degenerate-loop detection instead
+  // (see brain.ts) — guards that only fire on pathology, never on progress.
+  turnBudgetS: Math.max(60, Number(env('LOOPER_TURN_BUDGET_S', '1200')) || 1200),
   maxMessageChars: Number(env('LOOPER_MAX_MESSAGE_CHARS', '4000')),
   dream: {
     enabled: env('DREAM_ENABLED', 'true') !== 'false',
